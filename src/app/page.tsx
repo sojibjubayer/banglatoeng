@@ -304,8 +304,16 @@ export default function Home() {
                       <button type="button" aria-expanded={Boolean(revealed[entry._id])} aria-label={revealed[entry._id] ? "Hide English translation" : "Show English translation"} onClick={() => setRevealed((current) => ({ ...current, [entry._id]: !current[entry._id] }))} className="min-h-9 shrink-0 rounded-md px-2 text-xs font-semibold text-[#285741] hover:bg-[#edf5ee]">
                         {revealed[entry._id] ? "Hide" : "English"}
                       </button>
-                      {isAdmin && <button type="button" aria-label="Edit entry" onClick={() => { setEditing({ ...entry }); setEditError(""); }} className="min-h-9 shrink-0 rounded-md px-2 text-xs font-semibold text-[#718078] hover:bg-[#edf5ee]">Edit</button>}
                     </div>
+                    {revealed[entry._id] && (
+                      <div className="ml-5 border-t border-[#edf1eb] pt-2 pb-1">
+                        <p className="break-words text-sm leading-5">{entry.english}</p>
+                        {entry.example && <p className="mt-1 text-sm text-[#77877d]">{entry.example}</p>}
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          <button type="button" aria-pressed={ratings[entry._id] === "got-it"} onClick={() => rateEntry(entry, "got-it")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "got-it" ? "border-[#285741] bg-[#d8f0df]" : "border-[#e3e9e1]")}>✓ Got it</button>
+                          <button type="button" aria-pressed={ratings[entry._id] === "review"} onClick={() => rateEntry(entry, "review")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "review" ? "border-[#806733] bg-[#f5edda]" : "border-[#e3e9e1]")}>↻ Review again</button>
+                      {isAdmin && <button type="button" disabled={updating} aria-label="Edit entry" onClick={() => { setEditing({ ...entry }); setEditError(""); }} className="ml-auto min-h-8 shrink-0 rounded-md px-2 text-xs font-semibold text-[#718078] hover:bg-[#edf5ee]">Edit</button>}
+                        </div>
                     {isAdmin && editing?._id === entry._id && (
                       <form onSubmit={saveEdit} className="my-2 space-y-2 rounded-lg border border-[#dce5dc] bg-[#f6f8f4] p-3">
                         <label className="block text-xs font-semibold">Bangla
@@ -328,14 +336,7 @@ export default function Home() {
                         </div>
                       </form>
                     )}
-                    {revealed[entry._id] && (
-                      <div className="ml-5 border-t border-[#edf1eb] pt-2 pb-1">
-                        <p className="break-words text-sm leading-5">{entry.english}</p>
-                        {entry.example && <p className="mt-1 text-sm text-[#77877d]">{entry.example}</p>}
-                        <div className="mt-1.5 flex flex-wrap gap-2">
-                          <button type="button" aria-pressed={ratings[entry._id] === "got-it"} onClick={() => rateEntry(entry, "got-it")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "got-it" ? "border-[#285741] bg-[#d8f0df]" : "border-[#e3e9e1]")}>✓ Got it</button>
-                          <button type="button" aria-pressed={ratings[entry._id] === "review"} onClick={() => rateEntry(entry, "review")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "review" ? "border-[#806733] bg-[#f5edda]" : "border-[#e3e9e1]")}>↻ Review again</button>
-                        </div>
+
                       </div>
                     )}
                   </li>
