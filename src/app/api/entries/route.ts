@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import getMongoClient from "@/lib/mongodb";
+import { isAdminAuthenticated } from "@/lib/auth";
 
 const allowedTypes = ["sentence", "vocabulary"] as const;
+const pageSize = 50;
 type EntryType = (typeof allowedTypes)[number];
 
 function validType(value: string | null): value is EntryType {
@@ -10,17 +12,31 @@ function validType(value: string | null): value is EntryType {
 }
 
 export async function GET(request: NextRequest) {
-  const type = request.nextUrl.searchParams.get("type");
+  const params = request.nextUrl.searchParams;
+  const type = params.get("type");
   if (!validType(type)) return NextResponse.json({ error: "Choose sentences or vocabulary." }, { status: 400 });
+
+  const requestedPage = Number.parseInt(params.get("page") || "1", 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const category = params.get("category");
+  const query: { type: EntryType; category?: string } = { type };
+  if (category && category !== "All categories") query.category = category;
+
   try {
     const client = await getMongoClient();
-    const entries = await client.db(process.env.MONGODB_DB || "bangla_to_english")
-      .collection("entries")
-      .find({ type })
-      .sort({ createdAt: -1 })
-      .limit(500)
-      .toArray();
-    return NextResponse.json({ entries: entries.map((entry) => ({ ...entry, _id: String(entry._id) })) });
+    const collection = client.db(process.env.MONGODB_DB || "bhasha_app").collection("entries");
+    const [entries, total] = await Promise.all([
+      collection.find(query).sort({ createdAt: -1, _id: -1 }).skip((page - 1) * pageSize).limit(pageSize).toArray(),
+      collection.countDocuments(query),
+    ]);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    return NextResponse.json({
+      entries: entries.map((entry) => ({ ...entry, _id: String(entry._id) })),
+      page,
+      pageSize,
+      total,
+      totalPages,
+    });
   } catch (error) {
     console.error("MongoDB read failed:", error);
     const message = error instanceof Error && error.message.startsWith("Missing MONGODB_URI")
@@ -31,6 +47,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: "Sign in as admin to add entries." }, { status: 401 });
+  }
   let body: { type?: string; bangla?: string; english?: string; category?: string; example?: string };
   try {
     body = await request.json();
@@ -50,7 +69,7 @@ export async function POST(request: NextRequest) {
       ...(body.example?.trim() ? { example: body.example.trim() } : {}),
       createdAt: new Date(),
     };
-    const result = await client.db(process.env.MONGODB_DB || "bangla_to_english").collection("entries").insertOne(entry);
+    const result = await client.db(process.env.MONGODB_DB || "bhasha_app").collection("entries").insertOne(entry);
     return NextResponse.json({ entry: { ...entry, _id: new ObjectId(result.insertedId).toString() } }, { status: 201 });
   } catch (error) {
     console.error("MongoDB save failed:", error);
@@ -60,3 +79,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 503 });
   }
 }
+

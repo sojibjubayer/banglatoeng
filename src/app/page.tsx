@@ -1,10 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
+type EntryType = "sentence" | "vocabulary";
+type Rating = "got-it" | "review";
 type Entry = {
   _id: string;
-  type: "sentence" | "vocabulary";
+  type: EntryType;
   bangla: string;
   english: string;
   category: string;
@@ -14,56 +16,141 @@ type Entry = {
 const categories = ["Daily life", "Conversation", "Work", "Travel", "Grammar", "Other"];
 
 export default function Home() {
-  const [type, setType] = useState<"sentence" | "vocabulary">("sentence");
+  const [type, setType] = useState<EntryType>("sentence");
+  const [view, setView] = useState<"practice" | "add" | "login">("practice");
   const [entries, setEntries] = useState<Entry[]>([]);
   const [active, setActive] = useState<Entry | null>(null);
-  const [answer, setAnswer] = useState("");
+  const [category, setCategory] = useState("All categories");
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [revealed, setRevealed] = useState(false);
+  const [rating, setRating] = useState<Rating | null>(null);
+  const [ratings, setRatings] = useState<Record<string, Rating>>({});
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [loggingIn, setLoggingIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
-  const [category, setCategory] = useState("All categories");
   const [form, setForm] = useState({ bangla: "", english: "", category: "Daily life", example: "" });
 
-  async function loadEntries(selected = type) {
+  async function loadEntries(selected: EntryType, requestedPage = 1, selectedCategory = "All categories", selectLast = false) {
     setLoading(true);
+    setNotice("");
     try {
-      const response = await fetch("/api/entries?type=" + selected, { cache: "no-store" });
+      const params = new URLSearchParams({ type: selected, page: String(requestedPage) });
+      if (selectedCategory !== "All categories") params.set("category", selectedCategory);
+      const response = await fetch("/api/entries?" + params.toString(), { cache: "no-store" });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not load your entries.");
-      setEntries(data.entries);
-      setActive(data.entries[0] || null);
-      setAnswer("");
+      if (!response.ok) throw new Error(data.error || "Could not load your library.");
+      const loadedEntries = data.entries as Entry[];
+      setEntries(loadedEntries);
+      setPage(data.page);
+      setTotalCount(data.total);
+      setTotalPages(data.totalPages);
+      setActive(loadedEntries.length ? loadedEntries[selectLast ? loadedEntries.length - 1 : 0] : null);
       setRevealed(false);
-      setNotice("");
+      setRating(null);
     } catch (error) {
       setEntries([]);
       setActive(null);
+      setTotalCount(0);
+      setTotalPages(1);
       setNotice(error instanceof Error ? error.message : "Could not connect to MongoDB.");
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { void loadEntries(type); }, [type]);
+  useEffect(() => {
+    setCategory("All categories");
+    setPage(1);
+    setRatings({});
+    void loadEntries(type, 1, "All categories");
+  }, [type]);
 
-  const filtered = useMemo(
-    () => category === "All categories" ? entries : entries.filter((entry) => entry.category === category),
-    [category, entries],
-  );
-  const currentIndex = active ? filtered.findIndex((entry) => entry._id === active._id) : -1;
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/session", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => { if (active) setIsAdmin(Boolean(data.isAdmin)); })
+      .catch(() => { if (active) setIsAdmin(false); })
+      .finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
+  const currentIndex = active ? entries.findIndex((entry) => entry._id === active._id) : -1;
+  const gotItCount = Object.values(ratings).filter((item) => item === "got-it").length;
+  const reviewCount = Object.values(ratings).filter((item) => item === "review").length;
 
-  function choose(entry: Entry) {
+  function choose(entry: Entry | null) {
     setActive(entry);
-    setAnswer("");
     setRevealed(false);
+    setRating(null);
   }
 
-  function nextEntry() {
-    if (!filtered.length) return;
-    choose(filtered[(Math.max(currentIndex, -1) + 1) % filtered.length]);
+  function move(offset: number) {
+    if (!entries.length) return;
+    const nextIndex = currentIndex + offset;
+    if (nextIndex >= 0 && nextIndex < entries.length) {
+      choose(entries[nextIndex]);
+    } else if (nextIndex < 0 && page > 1) {
+      void loadEntries(type, page - 1, category, true);
+    } else if (nextIndex >= entries.length && page < totalPages) {
+      void loadEntries(type, page + 1, category);
+    }
   }
 
+  function changePage(nextPage: number) {
+    if (nextPage < 1 || nextPage > totalPages || nextPage === page) return;
+    void loadEntries(type, nextPage, category);
+  }
+
+  function updateCategory(value: string) {
+    setCategory(value);
+    setPage(1);
+    void loadEntries(type, 1, value);
+  }
+
+  function mark(value: Rating) {
+    if (!active) return;
+    setRating(value);
+    setRatings((current) => ({ ...current, [active._id]: value }));
+  }
+
+  async function loginAdmin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoggingIn(true);
+    setNotice("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(loginForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not sign in.");
+      setIsAdmin(true);
+      setView("practice");
+      setLoginForm((current) => ({ ...current, password: "" }));
+      setNotice("Signed in as admin.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not sign in.");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function logoutAdmin() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setIsAdmin(false);
+      setView("practice");
+      setNotice("Signed out.");
+    }
+  }
   async function addEntry(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -76,11 +163,11 @@ export default function Home() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Could not save this entry.");
-      setEntries((current) => [data.entry, ...current]);
-      setActive(data.entry);
-      setAnswer("");
-      setRevealed(false);
+      setCategory("All categories");
+      setPage(1);
+      await loadEntries(type, 1, "All categories");
       setForm({ bangla: "", english: "", category: "Daily life", example: "" });
+      setView("practice");
       setNotice("Saved to your library.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not save this entry.");
@@ -90,103 +177,154 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f5f0] text-[#202b27]">
-      <div className="mx-auto flex min-h-screen max-w-[1500px]">
-        <aside className="hidden w-[238px] shrink-0 flex-col border-r border-[#e7e8e1] bg-[#fbfbf8] px-5 py-7 lg:flex">
-          <a className="mb-12 flex items-center gap-3" href="#">
-            <span className="grid h-10 w-10 place-items-center rounded-2xl bg-[#c6e9d7] text-xl">অ</span>
-            <span><b className="block text-[15px] tracking-tight">Bhasha</b><small className="text-xs text-[#7b8780]">Bangla → English</small></span>
-          </a>
-          <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-[#9ba49d]">Learn</p>
-          <button onClick={() => setType("sentence")} className={"nav-item " + (type === "sentence" ? "nav-active" : "")}><span>▤</span> Sentences</button>
-          <button onClick={() => setType("vocabulary")} className={"nav-item " + (type === "vocabulary" ? "nav-active" : "")}><span>◈</span> Vocabulary</button>
-          <div className="mt-auto rounded-2xl bg-[#edf4ee] p-4">
-            <span className="text-lg">✦</span>
-            <p className="mt-2 text-sm font-semibold">A little each day</p>
-            <p className="mt-1 text-xs leading-5 text-[#738178]">Try a few translations, then come back tomorrow.</p>
+    <main className="min-h-screen bg-[#f6f7f3] px-3 pb-5 pt-3 text-[#20362e] sm:px-5 sm:pt-5">
+      <div className="mx-auto w-full max-w-lg">
+        <header className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#d7f0df] text-lg font-semibold text-[#285741]">অ</span>
+            <div className="min-w-0"><p className="truncate text-base font-semibold">Bhasha</p><p className="text-xs text-[#77877d]">Bangla to English</p></div>
           </div>
-        </aside>
-
-        <section className="min-w-0 flex-1 px-5 py-6 sm:px-8 lg:px-10 lg:py-9">
-          <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[.16em] text-[#89958c]">Your learning space</p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-[34px]">Practice room</h1>
-            </div>
-            <div className="flex items-center gap-2 rounded-full border border-[#e7e8e1] bg-white px-4 py-2 text-sm text-[#68756d]">
-              <span className="h-2 w-2 rounded-full bg-[#63b58a]" /> Personal library
-            </div>
-          </header>
-
-          <div className="mb-6 grid gap-4 md:grid-cols-[1.5fr_1fr_1fr]">
-            <div className="rounded-3xl bg-[#244c3d] p-6 text-white sm:p-7">
-              <p className="text-xs font-semibold uppercase tracking-[.18em] text-[#b8d9c7]">Today’s practice</p>
-              <h2 className="mt-3 max-w-md text-2xl font-semibold leading-tight">Think in Bangla.<br />Find your English.</h2>
-              <p className="mt-3 max-w-sm text-sm leading-6 text-[#d1e2d7]">Try translating first. Reveal the answer when you’re ready.</p>
-              <div className="mt-6 flex gap-2">
-                <button onClick={nextEntry} disabled={!filtered.length} className="rounded-xl bg-[#d2f0dd] px-4 py-2.5 text-sm font-semibold text-[#204635] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">Start practicing <span className="ml-1">→</span></button>
-              </div>
-            </div>
-            <div className="rounded-3xl border border-[#e9e9e2] bg-white p-5 sm:p-6">
-              <p className="text-xs font-semibold uppercase tracking-[.14em] text-[#8a958d]">In this set</p>
-              <p className="mt-5 text-4xl font-semibold tracking-tight">{entries.length.toString().padStart(2, "0")}</p>
-              <p className="mt-2 text-sm text-[#79847d]">{type === "sentence" ? "sentence pairs" : "vocabulary words"}</p>
-            </div>
-            <div className="rounded-3xl border border-[#e9e9e2] bg-white p-5 sm:p-6">
-              <p className="text-xs font-semibold uppercase tracking-[.14em] text-[#8a958d]">Your focus</p>
-              <p className="mt-5 text-2xl font-semibold">{type === "sentence" ? "Sentences" : "Vocabulary"}</p>
-              <p className="mt-2 text-sm text-[#79847d]">Choose a prompt and take your time.</p>
-            </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {authLoading ? (
+              <span className="text-xs text-[#829087]">Checking…</span>
+            ) : isAdmin ? (
+              <>
+                <button type="button" onClick={() => { setView(view === "add" ? "practice" : "add"); setNotice(""); }} className="min-h-11 rounded-xl border border-[#dce5dc] bg-white px-3 text-sm font-semibold text-[#315d47] shadow-sm hover:bg-[#f9fcf9] sm:px-4">{view === "add" ? "Practice" : "+ Add"}</button>
+                <button type="button" onClick={logoutAdmin} className="min-h-11 rounded-xl px-2 text-xs font-semibold text-[#718078] hover:bg-white sm:px-3">Log out</button>
+              </>
+            ) : (
+              <button type="button" onClick={() => { setView(view === "login" ? "practice" : "login"); setNotice(""); }} className="min-h-11 rounded-xl border border-[#dce5dc] bg-white px-3 text-sm font-semibold text-[#315d47] shadow-sm hover:bg-[#f9fcf9] sm:px-4">{view === "login" ? "Cancel" : "Admin login"}</button>
+            )}
           </div>
+        </header>
 
-          <div className="mb-5 flex gap-2 lg:hidden">
-            <button onClick={() => setType("sentence")} className={"rounded-full px-4 py-2 text-sm " + (type === "sentence" ? "bg-[#244c3d] text-white" : "border bg-white")}>Sentences</button>
-            <button onClick={() => setType("vocabulary")} className={"rounded-full px-4 py-2 text-sm " + (type === "vocabulary" ? "bg-[#244c3d] text-white" : "border bg-white")}>Vocabulary</button>
-          </div>
+        <div className="mb-3 grid grid-cols-2 rounded-xl bg-[#e9eee8] p-1">
+          <button type="button" onClick={() => setType("sentence")} aria-pressed={type === "sentence"} className={"min-h-10 rounded-lg px-3 text-sm font-semibold transition " + (type === "sentence" ? "bg-white text-[#285741] shadow-sm" : "text-[#7a887e]")}>Sentences</button>
+          <button type="button" onClick={() => setType("vocabulary")} aria-pressed={type === "vocabulary"} className={"min-h-10 rounded-lg px-3 text-sm font-semibold transition " + (type === "vocabulary" ? "bg-white text-[#285741] shadow-sm" : "text-[#7a887e]")}>Vocabulary</button>
+        </div>
 
-          <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(310px,.75fr)]">
-            <div className="rounded-3xl border border-[#e9e9e2] bg-white p-5 sm:p-7">
-              <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                <div><p className="text-xs font-semibold uppercase tracking-[.16em] text-[#8a958d]">Translation practice</p><h2 className="mt-1 text-xl font-semibold">{type === "sentence" ? "Translate this sentence" : "Recall this word"}</h2></div>
-                <select aria-label="Filter by category" value={category} onChange={(event) => setCategory(event.target.value)} className="rounded-xl border border-[#e7e9e2] bg-[#fbfbf8] px-3 py-2 text-sm outline-none focus:border-[#68ad89]">
-                  <option>All categories</option>{categories.map((item) => <option key={item}>{item}</option>)}
-                </select>
-              </div>
-              {notice && <p role="status" className="mb-4 rounded-xl bg-[#f0f5ef] px-4 py-3 text-sm text-[#496454]">{notice}</p>}
-              {loading ? <div className="py-14 text-center text-sm text-[#87928a]">Loading your library…</div> : active ? (
-                <>
-                  <div className="rounded-2xl bg-[#f7f8f3] px-5 py-7 sm:px-7">
-                    <div className="mb-5 flex items-center justify-between"><span className="rounded-full bg-[#e2efe5] px-3 py-1 text-xs font-medium text-[#527160]">{active.category}</span><span className="text-xs text-[#98a198]">{Math.max(currentIndex + 1, 1)} / {filtered.length}</span></div>
-                    <p lang="bn" className="text-right text-[26px] font-medium leading-[1.7] text-[#263f34] sm:text-[30px]">{active.bangla}</p>
-                  </div>
-                  {type === "sentence" && <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Write your English translation here…" className="mt-4 min-h-24 w-full resize-y rounded-2xl border border-[#e8e9e3] bg-white p-4 text-sm outline-none placeholder:text-[#a4aaa3] focus:border-[#68ad89]" />}
-                  {revealed && <div className="mt-4 rounded-2xl border border-[#d5eadb] bg-[#f3faf5] p-5"><p className="text-xs font-semibold uppercase tracking-[.14em] text-[#6d9278]">English answer</p><p className="mt-2 text-lg font-medium leading-7 text-[#244c3d]">{active.english}</p>{active.example && <p className="mt-3 border-t border-[#e0eee3] pt-3 text-sm text-[#718078]">Example: {active.example}</p>}</div>}
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    <button onClick={() => setRevealed(true)} className="rounded-xl bg-[#244c3d] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#183c2e]">{revealed ? "Answer revealed" : "Show English answer"}</button>
-                    <button onClick={nextEntry} className="rounded-xl border border-[#e7e9e2] px-4 py-2.5 text-sm font-semibold text-[#4d5d53] hover:bg-[#f8f9f6]">Next prompt →</button>
-                  </div>
-                </>
-              ) : (
-                <div className="rounded-2xl bg-[#f7f8f3] px-5 py-12 text-center">
-                  <p className="text-3xl">✎</p><h3 className="mt-3 font-semibold">Your practice set is ready for your sentences</h3>
-                  <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#7c8880]">{notice || "Add your first Bangla–English pair using the form, then it will appear here for practice."}</p>
-                </div>
-              )}
-            </div>
+        {notice && <p role="status" className="mb-4 rounded-xl border border-[#dce8dc] bg-white px-4 py-3 text-sm leading-5 text-[#496454]">{notice}</p>}
 
-            <form onSubmit={addEntry} className="rounded-3xl border border-[#e9e9e2] bg-white p-5 sm:p-6">
-              <div className="mb-5 flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[.16em] text-[#8a958d]">Build your library</p><h2 className="mt-1 text-xl font-semibold">Add {type === "sentence" ? "a sentence" : "a word"}</h2></div><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#edf4ee] text-lg text-[#527160]">＋</span></div>
-              <label className="mb-2 block text-sm font-medium">Bangla {type === "sentence" ? "sentence" : "word"}<textarea required lang="bn" dir="auto" value={form.bangla} onChange={(event) => setForm({ ...form, bangla: event.target.value })} placeholder={type === "sentence" ? "আজ আবহাওয়া সুন্দর।" : "সুন্দর"} className="mt-2 min-h-20 w-full rounded-xl border border-[#e7e9e2] bg-[#fcfcfa] p-3 text-base outline-none placeholder:text-[#a7ada7] focus:border-[#68ad89]" /></label>
-              <label className="mb-4 block text-sm font-medium">English {type === "sentence" ? "translation" : "meaning"}<textarea required value={form.english} onChange={(event) => setForm({ ...form, english: event.target.value })} placeholder={type === "sentence" ? "The weather is beautiful today." : "beautiful"} className="mt-2 min-h-20 w-full rounded-xl border border-[#e7e9e2] bg-[#fcfcfa] p-3 text-sm outline-none placeholder:text-[#a7ada7] focus:border-[#68ad89]" /></label>
-              {type === "vocabulary" && <label className="mb-4 block text-sm font-medium">Example (optional)<input value={form.example} onChange={(event) => setForm({ ...form, example: event.target.value })} placeholder="The garden is beautiful." className="mt-2 w-full rounded-xl border border-[#e7e9e2] bg-[#fcfcfa] px-3 py-3 text-sm outline-none placeholder:text-[#a7ada7] focus:border-[#68ad89]" /></label>}
-              <label className="mb-5 block text-sm font-medium">Category<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} className="mt-2 w-full rounded-xl border border-[#e7e9e2] bg-[#fcfcfa] px-3 py-3 text-sm outline-none focus:border-[#68ad89]">{categories.map((item) => <option key={item}>{item}</option>)}</select></label>
-              <button disabled={saving} className="w-full rounded-xl bg-[#d2f0dd] px-4 py-3 text-sm font-semibold text-[#204635] transition hover:bg-[#bfe6cd] disabled:opacity-50">{saving ? "Saving…" : "Save to my library"}</button>
-              <p className="mt-3 text-center text-xs leading-5 text-[#98a198]">One pair at a time. Your entries are saved in your connected database.</p>
+        {view === "login" ? (
+          <section className="rounded-2xl border border-[#e3e9e1] bg-white p-4 shadow-sm sm:p-5">
+            <p className="text-xs font-semibold uppercase tracking-[.16em] text-[#829087]">Admin access</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Sign in to add entries</h1>
+            <p className="mt-2 text-sm leading-5 text-[#7d8981]">Practice is open. Admin sign-in is only needed to add sentences or vocabulary.</p>
+            <form onSubmit={loginAdmin} className="mt-4 space-y-3">
+              <label className="block text-sm font-semibold">Admin email
+                <input required type="email" autoComplete="username" value={loginForm.email} onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })} className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
+              </label>
+              <label className="block text-sm font-semibold">Password
+                <input required type="password" autoComplete="current-password" value={loginForm.password} onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })} className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
+              </label>
+              <button disabled={loggingIn} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{loggingIn ? "Signing in…" : "Sign in"}</button>
             </form>
-          </div>
-          <footer className="mt-8 flex flex-wrap justify-between gap-2 border-t border-[#e6e8e0] pt-5 text-xs text-[#929c94]"><span>Bhasha · Your personal Bangla to English practice space</span><span>Practice at your own pace</span></footer>
-        </section>
+          </section>
+        ) : view === "add" && isAdmin ? (
+          <section className="rounded-2xl border border-[#e3e9e1] bg-white p-4 shadow-sm sm:p-5">
+            <p className="text-xs font-semibold uppercase tracking-[.16em] text-[#829087]">Your library</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Add {type === "sentence" ? "a sentence" : "a word"}</h1>
+            <p className="mt-2 text-sm leading-5 text-[#7d8981]">Enter one Bangla and English pair, then save it.</p>
+            <form onSubmit={addEntry} className="mt-4 space-y-3">
+              <label className="block text-sm font-semibold">
+                Bangla {type === "sentence" ? "sentence" : "word"}
+                <textarea required lang="bn" dir="auto" value={form.bangla} onChange={(event) => setForm({ ...form, bangla: event.target.value })} placeholder={type === "sentence" ? "আজ আবহাওয়া সুন্দর।" : "সুন্দর"} className="mt-2 min-h-24 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] p-4 text-lg font-normal leading-7 outline-none placeholder:text-[#adb5ae] focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
+              </label>
+              <label className="block text-sm font-semibold">
+                English {type === "sentence" ? "translation" : "meaning"}
+                <textarea required value={form.english} onChange={(event) => setForm({ ...form, english: event.target.value })} placeholder={type === "sentence" ? "The weather is beautiful today." : "beautiful"} className="mt-2 min-h-24 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] p-4 text-base font-normal leading-6 outline-none placeholder:text-[#adb5ae] focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
+              </label>
+              {type === "vocabulary" && <label className="block text-sm font-semibold">Example (optional)<input value={form.example} onChange={(event) => setForm({ ...form, example: event.target.value })} placeholder="The garden is beautiful." className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none placeholder:text-[#adb5ae] focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" /></label>}
+              <label className="block text-sm font-semibold">Category
+                <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-white px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]">{categories.map((item) => <option key={item}>{item}</option>)}</select>
+              </label>
+              <button disabled={saving} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : "Save pair"}</button>
+            </form>
+          </section>
+        ) : (
+          <>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#829087]">Practice</p><h1 className="mt-0.5 text-xl font-semibold tracking-tight">{type === "sentence" ? "Translate in your head" : "Recall the meaning"}</h1></div>
+              <select aria-label="Filter by category" value={category} onChange={(event) => updateCategory(event.target.value)} className="min-h-11 max-w-[48%] rounded-xl border border-[#dfe6de] bg-white px-3 text-sm outline-none focus:border-[#76ad8c]">
+                <option>All categories</option>{categories.map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </div>
+
+            <div className="mb-3 flex items-center justify-between rounded-xl border border-[#e3e9e1] bg-white px-3 py-2.5 text-xs">
+              <span className="text-[#77877d]">{loading ? "Loading…" : entries.length ? "Card " + ((page - 1) * 50 + currentIndex + 1) + " of " + totalCount : "No cards yet"}</span>
+              <span className="font-medium text-[#4e6b59]">{gotItCount} got it · {reviewCount} to review</span>
+            </div>
+
+            {loading ? (
+              <section className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center text-sm text-[#77877d]">Loading your practice cards…</section>
+            ) : active ? (
+              <section className="rounded-2xl border border-[#e3e9e1] bg-white p-3.5 shadow-sm sm:p-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="rounded-full bg-[#edf5ee] px-3 py-1.5 text-xs font-semibold text-[#4f735c]">{active.category}</span>
+                  <div className="flex gap-1">
+                    <button type="button" aria-label="Previous card" onClick={() => move(-1)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#e2e9e1] text-lg text-[#62746a] hover:bg-[#f7faf7]">←</button>
+                    <button type="button" aria-label="Next card" onClick={() => move(1)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#e2e9e1] text-lg text-[#62746a] hover:bg-[#f7faf7]">→</button>
+                  </div>
+                </div>
+                <div className="min-h-28 rounded-xl bg-[#f5f8f3] px-3 py-5 sm:px-5">
+                  <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[.14em] text-[#859287]">Bangla</p>
+                  <p lang="bn" className="text-center text-[23px] font-medium leading-[1.55] text-[#294c39] sm:text-[28px]">{active.bangla}</p>
+                </div>
+
+                {!revealed ? (
+                  <div className="mt-3">
+                    <p className="mb-2 text-center text-xs text-[#77877d]">Try the English translation in your head.</p>
+                    <button type="button" onClick={() => setRevealed(true)} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934]">Show English</button>
+                  </div>
+                ) : (
+                  <div className="mt-3">
+                    <div className="rounded-xl border border-[#dce9dd] bg-[#f6fbf6] px-3 py-3.5">
+                      <p className="mb-1.5 text-center text-[10px] font-semibold uppercase tracking-[.14em] text-[#78927d]">English</p>
+                      <p className="text-center text-lg font-medium leading-7 text-[#294c39]">{active.english}</p>
+                      {active.example && <p className="mt-3 border-t border-[#e2eee2] pt-3 text-center text-sm leading-6 text-[#738178]">{active.example}</p>}
+                    </div>
+                    {!rating ? (
+                      <>
+                        <p className="mb-2 mt-3 text-center text-xs text-[#77877d]">How did you do?</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button type="button" onClick={() => mark("got-it")} className="min-h-12 rounded-2xl bg-[#d8f0df] px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#c9e9d3]">✓ Got it</button>
+                          <button type="button" onClick={() => mark("review")} className="min-h-12 rounded-2xl bg-[#f5edda] px-3 text-sm font-semibold text-[#806733] transition hover:bg-[#f0e4c5]">↻ Review again</button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="mt-3">
+                        <p className="mb-2 text-center text-xs font-medium text-[#4e6b59]">{rating === "got-it" ? "Marked as got it." : "Added to your review count."}</p>
+                        <button type="button" onClick={() => move(1)} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934]">Next {type === "sentence" ? "sentence" : "word"} →</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            ) : (
+              <section className="rounded-2xl border border-[#e3e9e1] bg-white px-4 py-8 text-center shadow-sm">
+                <span className="text-3xl">✎</span>
+                <h2 className="mt-3 text-lg font-semibold">No {type === "sentence" ? "sentences" : "words"} yet</h2>
+                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#77877d]">{notice || "Add your first Bangla and English pair to start practicing."}</p>
+                {isAdmin && <button type="button" onClick={() => setView("add")} className="mt-5 min-h-12 rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white">Add your first pair</button>}
+              </section>
+            )}
+          </>
+        )}
+
+        {view === "practice" && totalCount > 0 && (
+          <nav aria-label="Entry pages" className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-[#e3e9e1] bg-white px-2.5 py-2 sm:px-3">
+            <button type="button" onClick={() => changePage(page - 1)} disabled={page <= 1 || loading} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">← Previous</button>
+            <span className="text-center text-xs font-medium text-[#77877d] sm:text-sm">Page {page} of {totalPages}<span className="block text-[11px] font-normal">50 per page · {totalCount} total</span></span>
+            <button type="button" onClick={() => changePage(page + 1)} disabled={page >= totalPages || loading} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">Next →</button>
+          </nav>
+        )}
+        <footer className="mt-4 pb-1 text-center text-[10px] leading-4 text-[#97a197]">One small practice at a time.</footer>
       </div>
     </main>
   );
 }
+
+
+
+
+

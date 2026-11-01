@@ -11,6 +11,16 @@ A personal practice site built with Next.js, React, Tailwind CSS, and MongoDB.
 5. From this folder, run: npm run dev
 6. Open http://localhost:3000.
 
+## Admin sign-in
+
+Only the configured admin can add sentences or vocabulary. Practice and answer reveal are available without signing in.
+
+1. In `.env.local`, set `ADMIN_EMAIL` and replace `ADMIN_PASSWORD` with a strong password you choose.
+2. Keep the generated `ADMIN_SESSION_SECRET` private. It must be at least 32 characters.
+3. Restart the dev server after changing environment values, then use **Admin login** in the site header.
+
+The app stores admin credentials in server environment variables and uses an HTTP-only session cookie. Do not commit `.env.local` or share the password.
+
 Keep .env.local private. It contains database credentials and should never be committed or pasted into chat.
 
 ## How entries are stored
@@ -18,4 +28,5 @@ Keep .env.local private. It contains database credentials and should never be co
 Sentence and vocabulary entries are saved as documents in the entries collection. Each document has a type (sentence or vocabulary), bangla, english, category, and createdAt; vocabulary entries may also include example.
 
 The site currently supports adding entries one at a time and practicing them with the English answer hidden until revealed.
+
 
