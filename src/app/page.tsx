@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Image from "next/image";
 
 type EntryType = "sentence" | "vocabulary";
 type Rating = "got-it" | "review";
@@ -213,7 +214,7 @@ export default function Home() {
       <div className="mx-auto w-full max-w-lg">
         <header className="mb-4 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[#d7f0df] text-lg font-semibold text-[#285741]">অ</span>
+            <Image src="/bhasha-icon.svg" alt="Bhasha logo" width={36} height={36} className="h-9 w-9 shrink-0 rounded-xl" />
             <div className="min-w-0"><p className="truncate text-base font-semibold">Bhasha</p><p className="text-xs text-[#77877d]">Bangla to English</p></div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
