@@ -13,30 +13,36 @@ type Entry = {
   example?: string;
 };
 
-const categories = ["Daily life", "Conversation", "Work", "Travel", "Grammar", "Other"];
+const defaultCategories = ["Daily life", "Conversation", "Work", "Travel", "Grammar", "Other"];
 
 export default function Home() {
   const [type, setType] = useState<EntryType>("sentence");
   const [view, setView] = useState<"practice" | "add" | "login">("practice");
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [active, setActive] = useState<Entry | null>(null);
   const [category, setCategory] = useState("All categories");
+  const [categories, setCategories] = useState(defaultCategories);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
-  const [revealed, setRevealed] = useState(false);
-  const [rating, setRating] = useState<Rating | null>(null);
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [ratings, setRatings] = useState<Record<string, Rating>>({});
+  const [reviewOnly, setReviewOnly] = useState(false);
+  const [reviewPage, setReviewPage] = useState(1);
+  const [ratedEntries, setRatedEntries] = useState<Record<string, Entry>>({});
+  const [progressReady, setProgressReady] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [loggingIn, setLoggingIn] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState<Entry | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [editError, setEditError] = useState("");
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ bangla: "", english: "", category: "Daily life", example: "" });
 
-  async function loadEntries(selected: EntryType, requestedPage = 1, selectedCategory = "All categories", selectLast = false) {
+  async function loadEntries(selected: EntryType, requestedPage = 1, selectedCategory = "All categories") {
     setLoading(true);
     setNotice("");
     try {
@@ -47,15 +53,15 @@ export default function Home() {
       if (!response.ok) throw new Error(data.error || "Could not load your library.");
       const loadedEntries = data.entries as Entry[];
       setEntries(loadedEntries);
+      if (Array.isArray(data.categories)) {
+        setCategories([...new Set([...defaultCategories, ...data.categories.filter((value: unknown): value is string => typeof value === "string")])].sort());
+      }
       setPage(data.page);
       setTotalCount(data.total);
       setTotalPages(data.totalPages);
-      setActive(loadedEntries.length ? loadedEntries[selectLast ? loadedEntries.length - 1 : 0] : null);
-      setRevealed(false);
-      setRating(null);
+      setRevealed({});
     } catch (error) {
       setEntries([]);
-      setActive(null);
       setTotalCount(0);
       setTotalPages(1);
       setNotice(error instanceof Error ? error.message : "Could not connect to MongoDB.");
@@ -67,7 +73,7 @@ export default function Home() {
   useEffect(() => {
     setCategory("All categories");
     setPage(1);
-    setRatings({});
+    setReviewPage(1);
     void loadEntries(type, 1, "All categories");
   }, [type]);
 
@@ -80,43 +86,69 @@ export default function Home() {
       .finally(() => { if (active) setAuthLoading(false); });
     return () => { active = false; };
   }, []);
-  const currentIndex = active ? entries.findIndex((entry) => entry._id === active._id) : -1;
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("bhasha-progress") || "{}");
+      setRatings(saved.ratings || {});
+      setRatedEntries(saved.entries || {});
+    } catch { /* Start with empty progress when storage is unavailable. */ }
+    setProgressReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!progressReady) return;
+    try { localStorage.setItem("bhasha-progress", JSON.stringify({ ratings, entries: ratedEntries })); } catch { /* Practice remains available without storage. */ }
+  }, [ratings, ratedEntries, progressReady]);
+
+  const matchingReviews = Object.values(ratedEntries).filter((entry) => entry.type === type && ratings[entry._id] === "review" && (category === "All categories" || entry.category === category));
+  const reviewPages = Math.max(1, Math.ceil(matchingReviews.length / 50));
+  const displayPage = reviewOnly ? Math.min(reviewPage, reviewPages) : page;
+  const displayPages = reviewOnly ? reviewPages : totalPages;
+  const displayTotal = reviewOnly ? matchingReviews.length : totalCount;
+  const displayedEntries = reviewOnly ? matchingReviews.slice((displayPage - 1) * 50, displayPage * 50) : entries;
+  function rateEntry(entry: Entry, rating: Rating) {
+    setRatedEntries((current) => ({ ...current, [entry._id]: entry }));
+    setRatings((current) => ({ ...current, [entry._id]: rating }));
+  }
+
   const gotItCount = Object.values(ratings).filter((item) => item === "got-it").length;
   const reviewCount = Object.values(ratings).filter((item) => item === "review").length;
 
-  function choose(entry: Entry | null) {
-    setActive(entry);
-    setRevealed(false);
-    setRating(null);
-  }
-
-  function move(offset: number) {
-    if (!entries.length) return;
-    const nextIndex = currentIndex + offset;
-    if (nextIndex >= 0 && nextIndex < entries.length) {
-      choose(entries[nextIndex]);
-    } else if (nextIndex < 0 && page > 1) {
-      void loadEntries(type, page - 1, category, true);
-    } else if (nextIndex >= entries.length && page < totalPages) {
-      void loadEntries(type, page + 1, category);
-    }
-  }
-
   function changePage(nextPage: number) {
+    if (reviewOnly) { setReviewPage(Math.max(1, Math.min(nextPage, reviewPages))); setRevealed({}); return; }
     if (nextPage < 1 || nextPage > totalPages || nextPage === page) return;
     void loadEntries(type, nextPage, category);
   }
 
   function updateCategory(value: string) {
     setCategory(value);
+    setReviewPage(1);
     setPage(1);
     void loadEntries(type, 1, value);
   }
 
-  function mark(value: Rating) {
-    if (!active) return;
-    setRating(value);
-    setRatings((current) => ({ ...current, [active._id]: value }));
+  async function saveEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editing) return;
+    setUpdating(true);
+    setEditError("");
+    try {
+      const response = await fetch("/api/entries", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(editing) });
+      const data = await response.json();
+      if (!response.ok) {
+        if (response.status === 401) setIsAdmin(false);
+        throw new Error(data.error || "Could not save changes.");
+      }
+      const updated = data.entry as Entry;
+      setEntries((current) => current.map((entry) => entry._id === updated._id ? updated : entry));
+      setRatedEntries((current) => current[updated._id] ? { ...current, [updated._id]: updated } : current);
+      setCategories((current) => [...new Set([...current, updated.category])].sort());
+      setEditing(null);
+      if (category !== "All categories" && category !== updated.category) await loadEntries(type, 1, category);
+      setNotice("Changes saved.");
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Could not save changes.");
+    } finally { setUpdating(false); }
   }
 
   async function loginAdmin(event: FormEvent<HTMLFormElement>) {
@@ -250,72 +282,81 @@ export default function Home() {
               </select>
             </div>
 
+            <div className="mb-2 flex gap-2">
+              <button type="button" aria-pressed={!reviewOnly} onClick={() => { setReviewOnly(false); setRevealed({}); }} className={"min-h-9 rounded-lg border px-3 text-xs font-semibold " + (!reviewOnly ? "border-[#285741] bg-[#d8f0df]" : "border-[#e3e9e1] bg-white")}>All</button>
+              <button type="button" aria-pressed={reviewOnly} onClick={() => { setReviewOnly(true); setReviewPage(1); setRevealed({}); }} className={"min-h-9 rounded-lg border px-3 text-xs font-semibold " + (reviewOnly ? "border-[#806733] bg-[#f5edda]" : "border-[#e3e9e1] bg-white")}>↻ Review again ({matchingReviews.length})</button>
+            </div>
+
             <div className="mb-3 flex items-center justify-between rounded-xl border border-[#e3e9e1] bg-white px-3 py-2.5 text-xs">
-              <span className="text-[#77877d]">{loading ? "Loading…" : entries.length ? "Card " + ((page - 1) * 50 + currentIndex + 1) + " of " + totalCount : "No cards yet"}</span>
+              <span className="text-[#77877d]">{(loading && !reviewOnly) ? "Loading…" : displayedEntries.length ? "Showing " + ((displayPage - 1) * 50 + 1) + "–" + ((displayPage - 1) * 50 + displayedEntries.length) + " of " + displayTotal : "No cards yet"}</span>
               <span className="font-medium text-[#4e6b59]">{gotItCount} got it · {reviewCount} to review</span>
             </div>
 
-            {loading ? (
+            {(loading && !reviewOnly) ? (
               <section className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center text-sm text-[#77877d]">Loading your practice cards…</section>
-            ) : active ? (
-              <section className="rounded-2xl border border-[#e3e9e1] bg-white p-3.5 shadow-sm sm:p-5">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <span className="rounded-full bg-[#edf5ee] px-3 py-1.5 text-xs font-semibold text-[#4f735c]">{active.category}</span>
-                  <div className="flex gap-1">
-                    <button type="button" aria-label="Previous card" onClick={() => move(-1)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#e2e9e1] text-lg text-[#62746a] hover:bg-[#f7faf7]">←</button>
-                    <button type="button" aria-label="Next card" onClick={() => move(1)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#e2e9e1] text-lg text-[#62746a] hover:bg-[#f7faf7]">→</button>
-                  </div>
-                </div>
-                <div className="min-h-28 rounded-xl bg-[#f5f8f3] px-3 py-5 sm:px-5">
-                  <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[.14em] text-[#859287]">Bangla</p>
-                  <p lang="bn" className="text-center text-[23px] font-medium leading-[1.55] text-[#294c39] sm:text-[28px]">{active.bangla}</p>
-                </div>
-
-                {!revealed ? (
-                  <div className="mt-3">
-                    <p className="mb-2 text-center text-xs text-[#77877d]">Try the English translation in your head.</p>
-                    <button type="button" onClick={() => setRevealed(true)} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934]">Show English</button>
-                  </div>
-                ) : (
-                  <div className="mt-3">
-                    <div className="rounded-xl border border-[#dce9dd] bg-[#f6fbf6] px-3 py-3.5">
-                      <p className="mb-1.5 text-center text-[10px] font-semibold uppercase tracking-[.14em] text-[#78927d]">English</p>
-                      <p className="text-center text-lg font-medium leading-7 text-[#294c39]">{active.english}</p>
-                      {active.example && <p className="mt-3 border-t border-[#e2eee2] pt-3 text-center text-sm leading-6 text-[#738178]">{active.example}</p>}
+            ) : displayedEntries.length > 0 ? (
+              <ol className="divide-y divide-[#e3e9e1] overflow-hidden rounded-xl border border-[#e3e9e1] bg-white" start={(displayPage - 1) * 50 + 1}>
+                {displayedEntries.map((entry, index) => (
+                  <li key={entry._id} className="px-3 py-2">
+                    <div className="flex items-start gap-2">
+                      <span className="pt-1 text-[11px] leading-6 text-[#829087]">{(displayPage - 1) * 50 + index + 1}.</span>
+                      <p lang="bn" className="min-w-0 flex-1 break-words py-1 text-base leading-6 text-[#294c39]">{entry.bangla}</p>
+                      <button type="button" aria-expanded={Boolean(revealed[entry._id])} aria-label={revealed[entry._id] ? "Hide English translation" : "Show English translation"} onClick={() => setRevealed((current) => ({ ...current, [entry._id]: !current[entry._id] }))} className="min-h-9 shrink-0 rounded-md px-2 text-xs font-semibold text-[#285741] hover:bg-[#edf5ee]">
+                        {revealed[entry._id] ? "Hide" : "English"}
+                      </button>
+                      {isAdmin && <button type="button" aria-label="Edit entry" onClick={() => { setEditing({ ...entry }); setEditError(""); }} className="min-h-9 shrink-0 rounded-md px-2 text-xs font-semibold text-[#718078] hover:bg-[#edf5ee]">Edit</button>}
                     </div>
-                    {!rating ? (
-                      <>
-                        <p className="mb-2 mt-3 text-center text-xs text-[#77877d]">How did you do?</p>
-                        <div className="grid grid-cols-2 gap-3">
-                          <button type="button" onClick={() => mark("got-it")} className="min-h-12 rounded-2xl bg-[#d8f0df] px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#c9e9d3]">✓ Got it</button>
-                          <button type="button" onClick={() => mark("review")} className="min-h-12 rounded-2xl bg-[#f5edda] px-3 text-sm font-semibold text-[#806733] transition hover:bg-[#f0e4c5]">↻ Review again</button>
+                    {isAdmin && editing?._id === entry._id && (
+                      <form onSubmit={saveEdit} className="my-2 space-y-2 rounded-lg border border-[#dce5dc] bg-[#f6f8f4] p-3">
+                        <label className="block text-xs font-semibold">Bangla
+                          <textarea required autoFocus lang="bn" value={editing.bangla} onChange={(event) => setEditing({ ...editing, bangla: event.target.value })} className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal" />
+                        </label>
+                        <label className="block text-xs font-semibold">English
+                          <textarea required value={editing.english} onChange={(event) => setEditing({ ...editing, english: event.target.value })} className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal" />
+                        </label>
+                        <label className="block text-xs font-semibold">Category
+                          <input required list="edit-categories" value={editing.category} onChange={(event) => setEditing({ ...editing, category: event.target.value })} className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal" />
+                          <datalist id="edit-categories">{categories.map((item) => <option key={item} value={item} />)}</datalist>
+                        </label>
+                        {entry.type === "vocabulary" && <label className="block text-xs font-semibold">Example
+                          <input value={editing.example || ""} onChange={(event) => setEditing({ ...editing, example: event.target.value })} className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal" />
+                        </label>}
+                        {editError && <p role="alert" className="text-xs text-red-700">{editError}</p>}
+                        <div className="flex gap-2">
+                          <button disabled={updating} className="min-h-10 rounded-lg bg-[#285741] px-3 text-xs font-semibold text-white disabled:opacity-50">{updating ? "Saving…" : "Save changes"}</button>
+                          <button type="button" disabled={updating} onClick={() => setEditing(null)} className="min-h-10 rounded-lg border border-[#dce5dc] px-3 text-xs font-semibold">Cancel</button>
                         </div>
-                      </>
-                    ) : (
-                      <div className="mt-3">
-                        <p className="mb-2 text-center text-xs font-medium text-[#4e6b59]">{rating === "got-it" ? "Marked as got it." : "Added to your review count."}</p>
-                        <button type="button" onClick={() => move(1)} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934]">Next {type === "sentence" ? "sentence" : "word"} →</button>
+                      </form>
+                    )}
+                    {revealed[entry._id] && (
+                      <div className="ml-5 border-t border-[#edf1eb] pt-2 pb-1">
+                        <p className="break-words text-sm leading-5">{entry.english}</p>
+                        {entry.example && <p className="mt-1 text-sm text-[#77877d]">{entry.example}</p>}
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          <button type="button" aria-pressed={ratings[entry._id] === "got-it"} onClick={() => rateEntry(entry, "got-it")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "got-it" ? "border-[#285741] bg-[#d8f0df]" : "border-[#e3e9e1]")}>✓ Got it</button>
+                          <button type="button" aria-pressed={ratings[entry._id] === "review"} onClick={() => rateEntry(entry, "review")} className={"min-h-8 rounded-md border px-2 text-xs font-semibold " + (ratings[entry._id] === "review" ? "border-[#806733] bg-[#f5edda]" : "border-[#e3e9e1]")}>↻ Review again</button>
+                        </div>
                       </div>
                     )}
-                  </div>
-                )}
-              </section>
+                  </li>
+                ))}
+              </ol>
             ) : (
               <section className="rounded-2xl border border-[#e3e9e1] bg-white px-4 py-8 text-center shadow-sm">
                 <span className="text-3xl">✎</span>
-                <h2 className="mt-3 text-lg font-semibold">No {type === "sentence" ? "sentences" : "words"} yet</h2>
-                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#77877d]">{notice || "Add your first Bangla and English pair to start practicing."}</p>
-                {isAdmin && <button type="button" onClick={() => setView("add")} className="mt-5 min-h-12 rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white">Add your first pair</button>}
+                <h2 className="mt-3 text-lg font-semibold">{reviewOnly ? "Nothing to review" : "No entries yet"}</h2>
+                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#77877d]">{reviewOnly ? "Mark an entry as Review again to find it here. Mark it Got it when you remember it." : notice || "Add your first Bangla and English pair to start practicing."}</p>
+                {isAdmin && !reviewOnly && <button type="button" onClick={() => setView("add")} className="mt-5 min-h-12 rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white">Add your first pair</button>}
               </section>
             )}
           </>
         )}
 
-        {view === "practice" && totalCount > 0 && (
+        {view === "practice" && displayTotal > 0 && (
           <nav aria-label="Entry pages" className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-[#e3e9e1] bg-white px-2.5 py-2 sm:px-3">
-            <button type="button" onClick={() => changePage(page - 1)} disabled={page <= 1 || loading} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">← Previous</button>
-            <span className="text-center text-xs font-medium text-[#77877d] sm:text-sm">Page {page} of {totalPages}<span className="block text-[11px] font-normal">50 per page · {totalCount} total</span></span>
-            <button type="button" onClick={() => changePage(page + 1)} disabled={page >= totalPages || loading} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">Next →</button>
+            <button type="button" onClick={() => changePage(displayPage - 1)} disabled={displayPage <= 1 || (loading && !reviewOnly)} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">← Previous</button>
+            <span className="text-center text-xs font-medium text-[#77877d] sm:text-sm">Page {displayPage} of {displayPages}<span className="block text-[11px] font-normal">50 per page · {displayTotal} total</span></span>
+            <button type="button" onClick={() => changePage(displayPage + 1)} disabled={displayPage >= displayPages || (loading && !reviewOnly)} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40">Next →</button>
           </nav>
         )}
         <footer className="mt-4 pb-1 text-center text-[10px] leading-4 text-[#97a197]">One small practice at a time.</footer>
