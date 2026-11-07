@@ -187,6 +187,9 @@ export default function Home() {
   }
   async function addEntry(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const addAnother = submitter?.value === "add-more";
+    const savedCategory = form.category.trim();
     setSaving(true);
     setNotice("");
     try {
@@ -200,10 +203,10 @@ export default function Home() {
       setCategory("All categories");
       setPage(1);
       await loadEntries(type, 1, "All categories");
-      setForm({ bangla: "", english: "", category: "Daily life", example: "" });
+      setForm({ bangla: "", english: "", category: addAnother ? savedCategory : "Daily life", example: "" });
       setAddingCategory(false);
-      setView("practice");
-      setNotice("Saved to your library.");
+      setView(addAnother ? "add" : "practice");
+      setNotice(addAnother ? "Saved. Add the next pair." : "Saved to your library.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not save this entry.");
     } finally {
@@ -287,7 +290,10 @@ export default function Home() {
               {addingCategory && <label className="block text-sm font-semibold">New category name
                 <input required autoFocus maxLength={60} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="For example, Daily conversation" className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
               </label>}
-              <button disabled={saving} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : "Save pair"}</button>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="submit" value="add-more" disabled={saving} className="min-h-12 rounded-2xl border border-[#b8d1be] bg-white px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#f4f8f3] disabled:opacity-60">{saving ? "Saving…" : "Add more"}</button>
+                <button type="submit" value="save" disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : "Save pair"}</button>
+              </div>
             </form>
           </section>
         ) : (
