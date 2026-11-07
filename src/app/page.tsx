@@ -14,7 +14,7 @@ type Entry = {
   example?: string;
 };
 
-const defaultCategories = ["Daily life", "Conversation", "Work", "Travel", "Grammar", "Other"];
+const defaultCategories = ["Daily life", "Daily conversation", "Work", "Travel", "Grammar", "Other"];
 
 export default function Home() {
   const [type, setType] = useState<EntryType>("sentence");
