@@ -5,6 +5,7 @@ import Image from "next/image";
 
 type EntryType = "sentence" | "vocabulary";
 type Rating = "got-it" | "review";
+type DraftEntry = { type: EntryType; bangla: string; english: string; category: string; example?: string };
 type Entry = {
   _id: string;
   type: EntryType;
@@ -43,6 +44,7 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ bangla: "", english: "", category: "Daily life", example: "" });
   const [addingCategory, setAddingCategory] = useState(false);
+  const [draftEntries, setDraftEntries] = useState<DraftEntry[]>([]);
 
   async function loadEntries(selected: EntryType, requestedPage = 1, selectedCategory = "All categories") {
     setLoading(true);
@@ -190,30 +192,59 @@ export default function Home() {
     const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const addAnother = submitter?.value === "add-more";
     const savedCategory = form.category.trim();
+    const hasBangla = Boolean(form.bangla.trim());
+    const hasEnglish = Boolean(form.english.trim());
+    const hasCurrentEntry = hasBangla && hasEnglish && Boolean(savedCategory);
+    const hasPartialEntry = hasBangla || hasEnglish || Boolean(savedCategory && addingCategory);
+    const current: DraftEntry = {
+      type,
+      bangla: form.bangla.trim(),
+      english: form.english.trim(),
+      category: savedCategory,
+      ...(form.example.trim() ? { example: form.example.trim() } : {}),
+    };
+    if (addAnother) {
+      if (draftEntries.length >= 99) {
+        setNotice("You can add up to 100 entries per batch. Save this batch to continue.");
+        return;
+      }
+      setDraftEntries((existing) => [...existing, current]);
+      setCategories((existing) => existing.includes(savedCategory) ? existing : [...existing, savedCategory].sort());
+      setForm({ bangla: "", english: "", category: savedCategory, example: "" });
+      setAddingCategory(false);
+      setNotice(`Added to the batch. ${draftEntries.length + 1} entr${draftEntries.length === 0 ? "y is" : "ies are"} waiting to be saved.`);
+      return;
+    }
+
+    if (draftEntries.length > 0 && hasPartialEntry && !hasCurrentEntry) {
+      setNotice("Finish the current pair or clear its fields before saving the queued entries.");
+      return;
+    }
+    const batch = draftEntries.length > 0 && !hasCurrentEntry ? draftEntries : [...draftEntries, current];
     setSaving(true);
     setNotice("");
     try {
       const response = await fetch("/api/entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, type }),
+        body: JSON.stringify({ entries: batch }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not save this entry.");
+      if (!response.ok) throw new Error(data.error || "Could not save this batch.");
       setCategory("All categories");
       setPage(1);
       await loadEntries(type, 1, "All categories");
-      setForm({ bangla: "", english: "", category: addAnother ? savedCategory : "Daily life", example: "" });
+      setDraftEntries([]);
+      setForm({ bangla: "", english: "", category: "Daily life", example: "" });
       setAddingCategory(false);
-      setView(addAnother ? "add" : "practice");
-      setNotice(addAnother ? "Saved. Add the next pair." : "Saved to your library.");
+      setView("practice");
+      setNotice(`Saved ${batch.length} ${batch.length === 1 ? "entry" : "entries"} to your library.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not save this entry.");
+      setNotice(error instanceof Error ? error.message : "Could not save this batch.");
     } finally {
       setSaving(false);
     }
   }
-
   return (
     <main className="min-h-screen bg-[#f6f7f3] px-3 pb-5 pt-3 text-[#20362e] sm:px-5 sm:pt-5">
       <div className="mx-auto w-full max-w-lg">
@@ -262,7 +293,7 @@ export default function Home() {
           <section className="rounded-2xl border border-[#e3e9e1] bg-white p-4 shadow-sm sm:p-5">
             <p className="text-xs font-semibold uppercase tracking-[.16em] text-[#829087]">Your library</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">Add {type === "sentence" ? "a sentence" : "a word"}</h1>
-            <p className="mt-2 text-sm leading-5 text-[#7d8981]">Enter one Bangla and English pair, then save it.</p>
+            <p className="mt-2 text-sm leading-5 text-[#7d8981]">Add pairs to a batch, then save them together.</p>
             <form onSubmit={addEntry} className="mt-4 space-y-3">
               <label className="block text-sm font-semibold">
                 Bangla {type === "sentence" ? "sentence" : "word"}
@@ -290,9 +321,17 @@ export default function Home() {
               {addingCategory && <label className="block text-sm font-semibold">New category name
                 <input required autoFocus maxLength={60} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="For example, Daily conversation" className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
               </label>}
-              <div className="grid grid-cols-2 gap-2">
+              {draftEntries.length > 0 && <section aria-label="Entries waiting to be saved" className="rounded-xl border border-[#dce8dc] bg-[#f7faf6] p-3">
+                <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-[#315d47]">Ready to save</h2><span className="text-xs text-[#77877d]">{draftEntries.length} queued · not saved yet</span></div>
+                <ol className="max-h-52 space-y-2 overflow-y-auto">
+                  {draftEntries.map((entry, index) => <li key={`${index}-${entry.type}`} className="flex items-start gap-2 rounded-lg bg-white p-2 text-xs">
+                    <span className="min-w-0 flex-1"><span className="block break-words font-medium text-[#294c39]">{entry.bangla}</span><span className="mt-0.5 block break-words text-[#77877d]">{entry.english}</span><span className="mt-1 inline-block rounded bg-[#edf5ee] px-1.5 py-0.5 text-[10px] text-[#496454]">{entry.category} · {entry.type}</span></span>
+                    <button type="button" aria-label={`Remove queued entry ${index + 1}`} onClick={() => setDraftEntries((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="min-h-8 shrink-0 rounded px-2 font-semibold text-[#718078] hover:bg-[#f4f8f3]">Remove</button>
+                  </li>)}
+                </ol>
+              </section>}              <div className="grid grid-cols-2 gap-2">
                 <button type="submit" value="add-more" disabled={saving} className="min-h-12 rounded-2xl border border-[#b8d1be] bg-white px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#f4f8f3] disabled:opacity-60">{saving ? "Saving…" : "Add more"}</button>
-                <button type="submit" value="save" disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : "Save pair"}</button>
+                <button type="submit" value="save" formNoValidate={draftEntries.length > 0} disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : draftEntries.length > 0 ? `Save all (${draftEntries.length + (hasCurrentEntry ? 1 : 0)})` : "Save pair"}</button>
               </div>
             </form>
           </section>

@@ -80,33 +80,55 @@ export async function POST(request: NextRequest) {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: "Sign in as admin to add entries." }, { status: 401 });
   }
-  let body: { type?: string; bangla?: string; english?: string; category?: string; example?: string };
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Please send a valid entry." }, { status: 400 });
   }
-  if (!validType(body.type || "") || !body.bangla?.trim() || !body.english?.trim() || !body.category?.trim()) {
-    return NextResponse.json({ error: "Bangla, English, and category are required." }, { status: 400 });
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "Please send a valid entry." }, { status: 400 });
+  }
+  const payload = body as Record<string, unknown>;
+  const isBatch = Array.isArray(payload.entries);
+  const rawEntries = isBatch ? payload.entries as unknown[] : [payload];
+  if (rawEntries.length === 0 || rawEntries.length > 100) {
+    return NextResponse.json({ error: "Save between 1 and 100 entries at a time." }, { status: 400 });
+  }
+  if (rawEntries.some((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+    const entry = value as Record<string, unknown>;
+    return !validType(typeof entry.type === "string" ? entry.type : "") ||
+      typeof entry.bangla !== "string" || !entry.bangla.trim() ||
+      typeof entry.english !== "string" || !entry.english.trim() ||
+      typeof entry.category !== "string" || !entry.category.trim() ||
+      (entry.example !== undefined && typeof entry.example !== "string");
+  })) {
+    return NextResponse.json({ error: "Every entry needs Bangla, English, and a category." }, { status: 400 });
   }
   try {
     const client = await getMongoClient();
-    const entry = {
-      type: body.type,
-      bangla: body.bangla.trim(),
-      english: body.english.trim(),
-      category: body.category.trim(),
-      ...(body.example?.trim() ? { example: body.example.trim() } : {}),
-      createdAt: new Date(),
-    };
-    const result = await client.db(process.env.MONGODB_DB || "bhasha_app").collection("entries").insertOne(entry);
-    return NextResponse.json({ entry: { ...entry, _id: new ObjectId(result.insertedId).toString() } }, { status: 201 });
+    const entries = rawEntries.map((value) => {
+      const entry = value as Record<string, string>;
+      return {
+        type: entry.type as EntryType,
+        bangla: entry.bangla.trim(),
+        english: entry.english.trim(),
+        category: entry.category.trim(),
+        ...(entry.example?.trim() ? { example: entry.example.trim() } : {}),
+        createdAt: new Date(),
+      };
+    });
+    const result = await client.db(process.env.MONGODB_DB || "bhasha_app").collection("entries").insertMany(entries, { ordered: true });
+    if (!isBatch) {
+      return NextResponse.json({ entry: { ...entries[0], _id: new ObjectId(result.insertedIds[0]).toString() } }, { status: 201 });
+    }
+    return NextResponse.json({ saved: entries.length }, { status: 201 });
   } catch (error) {
     console.error("MongoDB save failed:", error);
     const message = error instanceof Error && error.message.startsWith("Missing MONGODB_URI")
       ? "MongoDB is not connected yet. Add MONGODB_URI to .env.local and restart the app."
-      : "Could not save to MongoDB. Check your connection settings.";
+      : "Could not save the entries. Check your connection settings.";
     return NextResponse.json({ error: message }, { status: 503 });
   }
 }
-
