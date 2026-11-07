@@ -42,6 +42,7 @@ export default function Home() {
   const [editError, setEditError] = useState("");
   const [notice, setNotice] = useState("");
   const [form, setForm] = useState({ bangla: "", english: "", category: "Daily life", example: "" });
+  const [addingCategory, setAddingCategory] = useState(false);
 
   async function loadEntries(selected: EntryType, requestedPage = 1, selectedCategory = "All categories") {
     setLoading(true);
@@ -200,6 +201,7 @@ export default function Home() {
       setPage(1);
       await loadEntries(type, 1, "All categories");
       setForm({ bangla: "", english: "", category: "Daily life", example: "" });
+      setAddingCategory(false);
       setView("practice");
       setNotice("Saved to your library.");
     } catch (error) {
@@ -269,8 +271,22 @@ export default function Home() {
               </label>
               {type === "vocabulary" && <label className="block text-sm font-semibold">Example (optional)<input value={form.example} onChange={(event) => setForm({ ...form, example: event.target.value })} placeholder="The garden is beautiful." className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none placeholder:text-[#adb5ae] focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" /></label>}
               <label className="block text-sm font-semibold">Category
-                <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-white px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]">{categories.map((item) => <option key={item}>{item}</option>)}</select>
+                <select value={addingCategory ? "__add_new_category__" : form.category} onChange={(event) => {
+                  if (event.target.value === "__add_new_category__") {
+                    setAddingCategory(true);
+                    setForm({ ...form, category: "" });
+                  } else {
+                    setAddingCategory(false);
+                    setForm({ ...form, category: event.target.value });
+                  }
+                }} className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-white px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]">
+                  {categories.map((item) => <option key={item} value={item}>{item}</option>)}
+                  <option value="__add_new_category__">+ Add new category…</option>
+                </select>
               </label>
+              {addingCategory && <label className="block text-sm font-semibold">New category name
+                <input required autoFocus maxLength={60} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="For example, Daily conversation" className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
+              </label>}
               <button disabled={saving} className="min-h-12 w-full rounded-2xl bg-[#285741] px-5 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : "Save pair"}</button>
             </form>
           </section>
