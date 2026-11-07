@@ -331,7 +331,7 @@ export default function Home() {
                 </ol>
               </section>}              <div className="grid grid-cols-2 gap-2">
                 <button type="submit" value="add-more" disabled={saving} className="min-h-12 rounded-2xl border border-[#b8d1be] bg-white px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#f4f8f3] disabled:opacity-60">{saving ? "Saving…" : "Add more"}</button>
-                <button type="submit" value="save" formNoValidate={draftEntries.length > 0} disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : draftEntries.length > 0 ? `Save all (${draftEntries.length + (hasCurrentEntry ? 1 : 0)})` : "Save pair"}</button>
+                <button type="submit" value="save" formNoValidate={draftEntries.length > 0} disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : draftEntries.length > 0 ? `Save all (${draftEntries.length + (form.bangla.trim() && form.english.trim() && form.category.trim() ? 1 : 0)})` : "Save pair"}</button>
               </div>
             </form>
           </section>
