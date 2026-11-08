@@ -321,6 +321,7 @@ export default function Home() {
               {addingCategory && <label className="block text-sm font-semibold">New category name
                 <input required autoFocus maxLength={60} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} placeholder="For example, Daily conversation" className="mt-2 min-h-12 w-full rounded-2xl border border-[#dfe6de] bg-[#fbfcfa] px-4 text-base font-normal outline-none focus:border-[#76ad8c] focus:ring-2 focus:ring-[#d7f0df]" />
               </label>}
+              <button type="submit" value="add-more" disabled={saving} className="min-h-12 w-full rounded-2xl border border-[#b8d1be] bg-white px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#f4f8f3] disabled:opacity-60">{saving ? "Saving…" : "Add more"}</button>
               {draftEntries.length > 0 && <section aria-label="Entries waiting to be saved" className="rounded-xl border border-[#dce8dc] bg-[#f7faf6] p-3">
                 <div className="mb-2 flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-[#315d47]">Ready to save</h2><span className="text-xs text-[#77877d]">{draftEntries.length} queued · not saved yet</span></div>
                 <ol className="max-h-52 space-y-2 overflow-y-auto">
@@ -329,10 +330,8 @@ export default function Home() {
                     <button type="button" aria-label={`Remove queued entry ${index + 1}`} onClick={() => setDraftEntries((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="min-h-8 shrink-0 rounded px-2 font-semibold text-[#718078] hover:bg-[#f4f8f3]">Remove</button>
                   </li>)}
                 </ol>
-              </section>}              <div className="grid grid-cols-2 gap-2">
-                <button type="submit" value="add-more" disabled={saving} className="min-h-12 rounded-2xl border border-[#b8d1be] bg-white px-3 text-sm font-semibold text-[#285741] transition hover:bg-[#f4f8f3] disabled:opacity-60">{saving ? "Saving…" : "Add more"}</button>
-                <button type="submit" value="save" formNoValidate={draftEntries.length > 0} disabled={saving} className="min-h-12 rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : draftEntries.length > 0 ? `Save all (${draftEntries.length + (form.bangla.trim() && form.english.trim() && form.category.trim() ? 1 : 0)})` : "Save pair"}</button>
-              </div>
+              </section>}
+              <button type="submit" value="save" formNoValidate={draftEntries.length > 0} disabled={saving} className="min-h-12 w-full rounded-2xl bg-[#285741] px-3 text-sm font-semibold text-white transition hover:bg-[#1f4934] disabled:opacity-60">{saving ? "Saving…" : draftEntries.length > 0 ? `Save all (${draftEntries.length + (form.bangla.trim() && form.english.trim() && form.category.trim() ? 1 : 0)})` : "Save pair"}</button>
             </form>
           </section>
         ) : (
