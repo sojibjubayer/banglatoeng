@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import Image from "next/image";
@@ -31,6 +31,20 @@ type Entry = {
   example?: string;
 };
 
+type LibraryPage = {
+  entries: Entry[];
+  categories: string[];
+  total: number;
+  totalPages: number;
+};
+
+type LibraryResult = { query: string } & (
+  | { data: LibraryPage }
+  | { error: true }
+);
+
+const pageSize = 50;
+
 const defaultCategories = [
   "Daily life",
   "Daily conversation",
@@ -45,17 +59,20 @@ export default function Home() {
 
   const [view, setView] = useState<"practice" | "add" | "login">("practice");
 
-  const [entries, setEntries] = useState<Entry[]>([]);
-
   const [category, setCategory] = useState("All categories");
 
   const [categories, setCategories] = useState(defaultCategories);
 
   const [page, setPage] = useState(1);
 
-  const [totalCount, setTotalCount] = useState(0);
+  const [library, setLibrary] = useState<LibraryResult | null>(null);
+  const [libraryRevision, setLibraryRevision] = useState(0);
 
-  const [totalPages, setTotalPages] = useState(1);
+  const [practiceMode, setPracticeMode] = useState<"card" | "browse">("card");
+  const [cardIndex, setCardIndex] = useState(0);
+  const [practiceComplete, setPracticeComplete] = useState(false);
+  const practiceTarget = useRef<HTMLElement>(null);
+  const focusPractice = useRef(false);
 
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
@@ -76,8 +93,6 @@ export default function Home() {
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
 
   const [loggingIn, setLoggingIn] = useState(false);
-
-  const [loading, setLoading] = useState(true);
 
   const [saving, setSaving] = useState(false);
 
@@ -100,83 +115,40 @@ export default function Home() {
 
   const [draftEntries, setDraftEntries] = useState<DraftEntry[]>([]);
 
-  async function loadEntries(
-    selected: EntryType,
-    requestedPage = 1,
-    selectedCategory = "All categories",
-  ) {
-    setLoading(true);
-
-    setNotice("");
-
-    try {
-      const params = new URLSearchParams({
-        type: selected,
-        page: String(requestedPage),
-      });
-
-      if (selectedCategory !== "All categories")
-        params.set("category", selectedCategory);
-
-      const response = await fetch("/api/entries?" + params.toString(), {
-        cache: "no-store",
-      });
-
-      const data = await response.json();
-
-      if (!response.ok)
-        throw new Error(data.error || "Could not load your library.");
-
-      const loadedEntries = data.entries as Entry[];
-
-      setEntries(loadedEntries);
-
-      if (Array.isArray(data.categories)) {
-        setCategories(
-          [
-            ...new Set([
-              ...defaultCategories,
-              ...data.categories.filter(
-                (value: unknown): value is string => typeof value === "string",
-              ),
-            ]),
-          ].sort(),
-        );
-      }
-
-      setPage(data.page);
-
-      setTotalCount(data.total);
-
-      setTotalPages(data.totalPages);
-
-      setRevealed({});
-    } catch (error) {
-      setEntries([]);
-
-      setTotalCount(0);
-
-      setTotalPages(1);
-
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Could not connect to MongoDB.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  const params = new URLSearchParams({ type, page: String(page) });
+  if (category !== "All categories") params.set("category", category);
+  const libraryParams = params.toString();
+  const libraryQuery = libraryRevision + ":" + libraryParams;
+  const result = library?.query === libraryQuery ? library : null;
+  const libraryPage = result && "data" in result ? result.data : null;
+  const loadError = Boolean(result && "error" in result);
+  const loading = !result;
 
   useEffect(() => {
-    setCategory("All categories");
+    const controller = new AbortController();
 
-    setPage(1);
+    async function loadEntries() {
+      try {
+        const response = await fetch("/api/entries?" + libraryParams, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("Could not load practice cards.");
+        const data: LibraryPage = await response.json();
+        if (controller.signal.aborted) return;
 
-    setReviewPage(1);
+        setLibrary({ query: libraryQuery, data });
+        setCategories([...new Set([...defaultCategories, ...data.categories])].sort());
+      } catch {
+        if (!controller.signal.aborted) {
+          setLibrary({ query: libraryQuery, error: true });
+        }
+      }
+    }
 
-    void loadEntries(type, 1, "All categories");
-  }, [type]);
+    void loadEntries();
+    return () => controller.abort();
+  }, [libraryParams, libraryQuery]);
 
   useEffect(() => {
     let active = true;
@@ -202,17 +174,18 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("bhasha-progress") || "{}");
+    const frame = requestAnimationFrame(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem("bhasha-progress") || "{}");
+        setRatings(saved.ratings || {});
+        setRatedEntries(saved.entries || {});
+      } catch {
+        /* Start with empty progress when storage is unavailable. */
+      }
+      setProgressReady(true);
+    });
 
-      setRatings(saved.ratings || {});
-
-      setRatedEntries(saved.entries || {});
-    } catch {
-      /* Start with empty progress when storage is unavailable. */
-    }
-
-    setProgressReady(true);
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -235,52 +208,101 @@ export default function Home() {
       (category === "All categories" || entry.category === category),
   );
 
-  const reviewPages = Math.max(1, Math.ceil(matchingReviews.length / 50));
-
+  const reviewPages = Math.max(1, Math.ceil(matchingReviews.length / pageSize));
   const displayPage = reviewOnly ? Math.min(reviewPage, reviewPages) : page;
-
-  const displayPages = reviewOnly ? reviewPages : totalPages;
-
-  const displayTotal = reviewOnly ? matchingReviews.length : totalCount;
-
+  const displayPages = reviewOnly ? reviewPages : (libraryPage?.totalPages ?? 1);
+  const displayTotal = reviewOnly ? matchingReviews.length : (libraryPage?.total ?? 0);
+  const pageStart = (displayPage - 1) * pageSize;
   const displayedEntries = reviewOnly
-    ? matchingReviews.slice((displayPage - 1) * 50, displayPage * 50)
-    : entries;
+    ? matchingReviews.slice(pageStart, pageStart + pageSize)
+    : (libraryPage?.entries ?? []);
+
+  const singleCard = practiceMode === "card";
+  const cardOffset = Math.max(0, Math.min(cardIndex - pageStart, displayedEntries.length - 1));
+  const activeEntry = displayedEntries[cardOffset];
+  const cardNumber = pageStart + cardOffset + 1;
+  const visibleEntries = singleCard && activeEntry ? [activeEntry] : displayedEntries;
+  const practiceLoading = reviewOnly ? !progressReady : loading;
+  const practiceError = !reviewOnly && loadError;
+
+  useEffect(() => {
+    if (focusPractice.current && !practiceLoading && practiceTarget.current) {
+      practiceTarget.current.focus();
+      focusPractice.current = false;
+    }
+  }, [activeEntry?._id, practiceComplete, practiceLoading, practiceError]);
+
+  const gotItCount = Object.values(ratings).filter((item) => item === "got-it").length;
+  const reviewCount = Object.values(ratings).filter((item) => item === "review").length;
+
+  function moveToCard(index: number) {
+    const nextPage = Math.floor(index / pageSize) + 1;
+    if (reviewOnly) setReviewPage(nextPage);
+    else setPage(nextPage);
+    setCardIndex(index);
+    setRevealed({});
+    setPracticeComplete(false);
+  }
+
+  function navigateCard(index: number) {
+    focusPractice.current = true;
+    moveToCard(index);
+  }
 
   function rateEntry(entry: Entry, rating: Rating) {
     setRatedEntries((current) => ({ ...current, [entry._id]: entry }));
-
     setRatings((current) => ({ ...current, [entry._id]: rating }));
+
+    if (!singleCard) return;
+
+    focusPractice.current = true;
+    if (reviewOnly && rating === "got-it") {
+      moveToCard(Math.max(0, Math.min(cardNumber - 1, displayTotal - 2)));
+    } else if (cardNumber < displayTotal) {
+      moveToCard(cardNumber);
+    } else {
+      setRevealed({});
+      setPracticeComplete(true);
+    }
   }
 
-  const gotItCount = Object.values(ratings).filter(
-    (item) => item === "got-it",
-  ).length;
+  function resetPractice() {
+    focusPractice.current = false;
+    setCardIndex(0);
+    setReviewPage(1);
+    setPage(1);
+    setRevealed({});
+    setPracticeComplete(false);
+  }
 
-  const reviewCount = Object.values(ratings).filter(
-    (item) => item === "review",
-  ).length;
-
-  function changePage(nextPage: number) {
-    if (reviewOnly) {
-      setReviewPage(Math.max(1, Math.min(nextPage, reviewPages)));
-      setRevealed({});
-      return;
-    }
-
-    if (nextPage < 1 || nextPage > totalPages || nextPage === page) return;
-
-    void loadEntries(type, nextPage, category);
+  function updateType(value: EntryType) {
+    if (value === type) return;
+    setType(value);
+    setCategory("All categories");
+    setCategories(defaultCategories);
+    resetPractice();
   }
 
   function updateCategory(value: string) {
     setCategory(value);
+    resetPractice();
+  }
 
-    setReviewPage(1);
+  function updateReviewOnly(value: boolean) {
+    if (value === reviewOnly) return;
+    setReviewOnly(value);
+    resetPractice();
+  }
 
-    setPage(1);
+  function updatePracticeMode(value: "card" | "browse") {
+    if (value === practiceMode) return;
+    setPracticeMode(value);
+    setRevealed({});
+    setPracticeComplete(false);
+  }
 
-    void loadEntries(type, 1, value);
+  function refreshLibrary() {
+    setLibraryRevision((current) => current + 1);
   }
 
   async function saveEdit(event: FormEvent<HTMLFormElement>) {
@@ -309,9 +331,18 @@ export default function Home() {
 
       const updated = data.entry as Entry;
 
-      setEntries((current) =>
-        current.map((entry) => (entry._id === updated._id ? updated : entry)),
-      );
+      setLibrary((current) => {
+        if (!current || !("data" in current)) return current;
+        return {
+          ...current,
+          data: {
+            ...current.data,
+            entries: current.data.entries.map((entry) =>
+              entry._id === updated._id ? updated : entry,
+            ),
+          },
+        };
+      });
 
       setRatedEntries((current) =>
         current[updated._id] ? { ...current, [updated._id]: updated } : current,
@@ -323,8 +354,10 @@ export default function Home() {
 
       setEditing(null);
 
-      if (category !== "All categories" && category !== updated.category)
-        await loadEntries(type, 1, category);
+      if (category !== "All categories" && category !== updated.category) {
+        resetPractice();
+        refreshLibrary();
+      }
 
       setNotice("Changes saved.");
     } catch (error) {
@@ -482,10 +515,9 @@ export default function Home() {
         throw new Error(data.error || "Could not save this batch.");
 
       setCategory("All categories");
-
-      setPage(1);
-
-      await loadEntries(type, 1, "All categories");
+      setReviewOnly(false);
+      resetPractice();
+      refreshLibrary();
 
       setDraftEntries([]);
 
@@ -570,7 +602,7 @@ export default function Home() {
         <div className="mb-5 grid grid-cols-2 rounded-2xl border border-[#dfe9df] bg-[#e7eee7] p-1.5 shadow-sm">
           <button
             type="button"
-            onClick={() => setType("sentence")}
+            onClick={() => updateType("sentence")}
             aria-pressed={type === "sentence"}
             className={
               "min-h-12 rounded-xl px-3 text-sm font-semibold transition-all duration-200 " +
@@ -584,7 +616,7 @@ export default function Home() {
 
           <button
             type="button"
-            onClick={() => setType("vocabulary")}
+            onClick={() => updateType("vocabulary")}
             aria-pressed={type === "vocabulary"}
             className={
               "min-h-12 rounded-xl px-3 text-sm font-semibold transition-all duration-200 " +
@@ -848,306 +880,344 @@ export default function Home() {
         ) : (
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-[#829087]">
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                {singleCard ? (type === "sentence" ? "Translate into English" : "Recall the meaning") : (type === "sentence" ? "Browse sentences" : "Browse vocabulary")}
+              </h1>
+              <div role="group" aria-label="Practice view" className="flex rounded-xl border border-[#dfe6de] bg-white p-1">
+                <button
+                  type="button"
+                  aria-pressed={singleCard}
+                  onClick={() => updatePracticeMode("card")}
+                  className={singleCard ? "min-h-10 rounded-lg bg-[#285741] px-3 text-sm font-semibold text-white" : "min-h-10 rounded-lg px-3 text-sm font-semibold text-[#315d47] hover:bg-[#edf5ee]"}
+                >
                   Practice
-                </p>
-                <h1 className="mt-0.5 text-2xl font-bold tracking-tight sm:text-3xl">
-                  {type === "sentence"
-                    ? "Translate in your head"
-                    : "Recall the meaning"}
-                </h1>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={!singleCard}
+                  onClick={() => updatePracticeMode("browse")}
+                  className={!singleCard ? "min-h-10 rounded-lg bg-[#285741] px-3 text-sm font-semibold text-white" : "min-h-10 rounded-lg px-3 text-sm font-semibold text-[#315d47] hover:bg-[#edf5ee]"}
+                >
+                  Browse
+                </button>
               </div>
+            </div>
 
+            <div className="mb-4 flex flex-wrap items-center gap-2">
               <select
                 aria-label="Filter by category"
                 value={category}
                 onChange={(event) => updateCategory(event.target.value)}
-                className="min-h-11 max-w-[48%] rounded-xl border border-[#dfe6de] bg-white px-3 text-sm outline-none focus:border-[#76ad8c]"
+                className="min-h-11 w-full rounded-xl border border-[#dfe6de] bg-white px-3 text-sm focus-visible:outline-[#285741] sm:mr-auto sm:w-auto sm:max-w-[50%]"
               >
                 <option>All categories</option>
                 {categories.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
               </select>
+
+              <div role="group" aria-label="Card selection" className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  aria-pressed={!reviewOnly}
+                  onClick={() => updateReviewOnly(false)}
+                  className={"min-h-11 rounded-xl border px-3 text-sm font-semibold " + (!reviewOnly ? "border-[#285741] bg-[#d8f0df]" : "border-[#e3e9e1] bg-white")}
+                >
+                  All cards
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={reviewOnly}
+                  onClick={() => updateReviewOnly(true)}
+                  className={"min-h-11 rounded-xl border px-3 text-sm font-semibold " + (reviewOnly ? "border-[#806733] bg-[#f5edda]" : "border-[#e3e9e1] bg-white")}
+                >
+                  Review queue ({matchingReviews.length})
+                </button>
+              </div>
             </div>
 
-            <div className="mb-4 flex flex-wrap gap-2">
-              <button
-                type="button"
-                aria-pressed={!reviewOnly}
-                onClick={() => {
-                  setReviewOnly(false);
-                  setRevealed({});
-                }}
-                className={
-                  "min-h-9 rounded-lg border px-3 text-xs font-semibold " +
-                  (!reviewOnly
-                    ? "border-[#285741] bg-[#d8f0df]"
-                    : "border-[#e3e9e1] bg-white")
-                }
+            {practiceLoading ? (
+              <p role="status" className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center text-sm text-[#496454]">
+                Loading practice cards…
+              </p>
+            ) : practiceError ? (
+              <section
+                ref={practiceTarget}
+                tabIndex={-1}
+                className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center shadow-sm"
               >
-                All
-              </button>
-
-              <button
-                type="button"
-                aria-pressed={reviewOnly}
-                onClick={() => {
-                  setReviewOnly(true);
-                  setReviewPage(1);
-                  setRevealed({});
-                }}
-                className={
-                  "min-h-9 rounded-lg border px-3 text-xs font-semibold " +
-                  (reviewOnly
-                    ? "border-[#806733] bg-[#f5edda]"
-                    : "border-[#e3e9e1] bg-white")
-                }
-              >
-                ↻ Review again ({matchingReviews.length})
-              </button>
-            </div>
-
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#e3e9e1] bg-white px-4 py-3 text-xs shadow-sm">
-              <span className="text-[#77877d]">
-                {loading && !reviewOnly
-                  ? "Loading…"
-                  : displayedEntries.length
-                    ? "Showing " +
-                      ((displayPage - 1) * 50 + 1) +
-                      "–" +
-                      ((displayPage - 1) * 50 + displayedEntries.length) +
-                      " of " +
-                      displayTotal
-                    : "No cards yet"}
-              </span>
-
-              <span className="font-medium text-[#4e6b59]">
-                {gotItCount} got it · {reviewCount} to review
-              </span>
-            </div>
-
-            {loading && !reviewOnly ? (
-              <section className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center text-sm text-[#77877d]">
-                Loading your practice cards…
+                <h2 className="text-lg font-semibold">Couldn’t load practice cards</h2>
+                <p className="mt-2 text-sm text-[#496454]">Try loading this selection again.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    focusPractice.current = true;
+                    refreshLibrary();
+                  }}
+                  className="mt-4 min-h-11 rounded-xl bg-[#285741] px-4 text-sm font-semibold text-white"
+                >
+                  Retry
+                </button>
               </section>
-            ) : displayedEntries.length > 0 ? (
-              <ol className="grid gap-3" start={(displayPage - 1) * 50 + 1}>
-                {displayedEntries.map((entry, index) => (
-                  <li
-                    key={entry._id}
-                    className="rounded-2xl border border-[#e2eae1] bg-white p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5"
-                  >
-                    <div className="flex items-start gap-2">
-                      <span className="mt-0.5 flex h-7 min-w-7 items-center justify-center rounded-lg bg-[#edf5ee] px-1 text-xs font-semibold text-[#47745b]">
-                        {(displayPage - 1) * 50 + index + 1}.
-                      </span>
-
-                      <p
-                        lang="bn"
-                        className="min-w-0 flex-1 break-words py-1 text-lg font-medium leading-8 text-[#294c39]"
-                      >
-                        {entry.bangla}
-                      </p>
-
-                      <button
-                        type="button"
-                        aria-expanded={Boolean(revealed[entry._id])}
-                        aria-label={
-                          revealed[entry._id]
-                            ? "Hide English translation"
-                            : "Show English translation"
-                        }
-                        onClick={() =>
-                          setRevealed((current) => ({
-                            ...current,
-                            [entry._id]: !current[entry._id],
-                          }))
-                        }
-                        className="min-h-10 shrink-0 rounded-xl border border-[#cfe3d2] bg-[#f0f8f0] px-3 text-xs font-bold text-[#285741] transition hover:bg-[#dff1e3]"
-                      >
-                        {revealed[entry._id] ? "Hide" : "English"}
-                      </button>
-                    </div>
-
-                    {revealed[entry._id] && (
-                      <div className="ml-0 mt-3 rounded-xl border border-[#e3eee4] bg-[#f7fbf7] p-4 sm:ml-9">
-                        <p className="wrap-break-word text-base font-semibold leading-7 text-[#214c35]">
-                          {entry.english}
-                        </p>
-
-                        {entry.example && (
-                          <p className="mt-1 text-sm text-[#77877d]">
-                            {entry.example}
-                          </p>
+            ) : singleCard && practiceComplete ? (
+              <section
+                ref={practiceTarget}
+                tabIndex={-1}
+                className="rounded-2xl border border-[#e3e9e1] bg-white p-7 text-center shadow-sm"
+              >
+                <h2 className="text-xl font-semibold">You reached the last card</h2>
+                <button
+                  type="button"
+                  onClick={() => navigateCard(0)}
+                  className="mt-4 min-h-11 rounded-xl bg-[#285741] px-4 text-sm font-semibold text-white"
+                >
+                  Start over
+                </button>
+              </section>
+            ) : visibleEntries.length > 0 ? (
+              <>
+                <p
+                  ref={!singleCard ? (node) => { practiceTarget.current = node; } : undefined}
+                  tabIndex={!singleCard ? -1 : undefined}
+                  className="mb-3 text-sm font-medium text-[#496454]"
+                  role="status"
+                >
+                  {singleCard
+                    ? `Card ${cardNumber} of ${displayTotal}`
+                    : `Showing ${pageStart + 1}–${pageStart + displayedEntries.length} of ${displayTotal}`}
+                  {progressReady && ` · ${gotItCount} got it · ${reviewCount} to review`}
+                </p>
+                <ol className="grid gap-3" start={singleCard ? cardNumber : pageStart + 1}>
+                  {visibleEntries.map((entry, index) => (
+                    <li
+                      key={entry._id}
+                      className={"rounded-2xl border border-[#e2eae1] bg-white shadow-sm " + (singleCard ? "p-5 sm:p-7" : "p-4 sm:p-5")}
+                    >
+                      <div className={singleCard ? "flex flex-col items-start gap-4" : "flex items-start gap-2"}>
+                        {!singleCard && (
+                          <span className="mt-0.5 flex h-7 min-w-7 items-center justify-center rounded-lg bg-[#edf5ee] px-1 text-xs font-semibold text-[#47745b]">
+                            {pageStart + index + 1}.
+                          </span>
                         )}
 
-                        <div className="mt-1.5 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            aria-pressed={ratings[entry._id] === "got-it"}
-                            onClick={() => rateEntry(entry, "got-it")}
-                            className={
-                              "min-h-8 rounded-md border px-2 text-xs font-semibold " +
-                              (ratings[entry._id] === "got-it"
-                                ? "border-[#285741] bg-[#d8f0df]"
-                                : "border-[#e3e9e1]")
-                            }
-                          >
-                            ✓ Got it
-                          </button>
+                        <p
+                          ref={singleCard ? (node) => { practiceTarget.current = node; } : undefined}
+                          tabIndex={singleCard ? -1 : undefined}
+                          lang="bn"
+                          className={"min-w-0 wrap-break-word font-medium text-[#294c39] " + (singleCard ? "w-full text-2xl leading-relaxed sm:text-3xl" : "flex-1 py-1 text-lg leading-8")}
+                        >
+                          {entry.bangla}
+                        </p>
 
-                          <button
-                            type="button"
-                            aria-pressed={ratings[entry._id] === "review"}
-                            onClick={() => rateEntry(entry, "review")}
-                            className={
-                              "min-h-8 rounded-md border px-2 text-xs font-semibold " +
-                              (ratings[entry._id] === "review"
-                                ? "border-[#806733] bg-[#f5edda]"
-                                : "border-[#e3e9e1]")
-                            }
-                          >
-                            ↻ Review again
-                          </button>
+                        <button
+                          type="button"
+                          aria-expanded={Boolean(revealed[entry._id])}
+                          aria-controls={"english-" + entry._id}
+                          onClick={() =>
+                            setRevealed((current) => ({
+                              ...current,
+                              [entry._id]: !current[entry._id],
+                            }))
+                          }
+                          className={singleCard && !revealed[entry._id]
+                            ? "min-h-11 w-full rounded-xl bg-[#285741] px-4 text-sm font-semibold text-white hover:bg-[#1f4934] sm:w-auto"
+                            : "min-h-11 shrink-0 rounded-xl border border-[#cfe3d2] bg-[#f0f8f0] px-3 text-sm font-semibold text-[#285741] hover:bg-[#dff1e3]"}
+                        >
+                          {revealed[entry._id] ? "Hide English" : "Reveal English"}
+                        </button>
+                      </div>
 
-                          {isAdmin && (
-                            <button
-                              type="button"
-                              disabled={updating}
-                              aria-label="Edit entry"
-                              onClick={() => {
-                                setEditing({ ...entry });
-                                setEditError("");
-                              }}
-                              className="ml-auto min-h-8 shrink-0 rounded-md px-2 text-xs font-semibold text-[#718078] hover:bg-[#edf5ee]"
-                            >
-                              Edit
-                            </button>
-                          )}
-                        </div>
+                      <div id={"english-" + entry._id} hidden={!revealed[entry._id]}>
+                        {revealed[entry._id] && (
+                          <div className={"mt-3 rounded-xl border border-[#e3eee4] bg-[#f7fbf7] p-4 " + (singleCard ? "" : "sm:ml-9")}>
+                            <p className="wrap-break-word text-base font-semibold leading-7 text-[#214c35]">
+                              {entry.english}
+                            </p>
 
-                        {isAdmin && editing?._id === entry._id && (
-                          <form
-                            onSubmit={saveEdit}
-                            className="my-2 space-y-2 rounded-lg border border-[#dce5dc] bg-[#f6f8f4] p-3"
-                          >
-                            <label className="block text-xs font-semibold">
-                              Bangla
-                              <textarea
-                                required
-                                autoFocus
-                                lang="bn"
-                                value={editing.bangla}
-                                onChange={(event) =>
-                                  setEditing({
-                                    ...editing,
-                                    bangla: event.target.value,
-                                  })
-                                }
-                                className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal"
-                              />
-                            </label>
-
-                            <label className="block text-xs font-semibold">
-                              English
-                              <textarea
-                                required
-                                value={editing.english}
-                                onChange={(event) =>
-                                  setEditing({
-                                    ...editing,
-                                    english: event.target.value,
-                                  })
-                                }
-                                className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal"
-                              />
-                            </label>
-
-                            <label className="block text-xs font-semibold">
-                              Category
-                              <input
-                                required
-                                list="edit-categories"
-                                value={editing.category}
-                                onChange={(event) =>
-                                  setEditing({
-                                    ...editing,
-                                    category: event.target.value,
-                                  })
-                                }
-                                className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal"
-                              />
-                              <datalist id="edit-categories">
-                                {categories.map((item) => (
-                                  <option key={item} value={item} />
-                                ))}
-                              </datalist>
-                            </label>
-
-                            {entry.type === "vocabulary" && (
-                              <label className="block text-xs font-semibold">
-                                Example
-                                <input
-                                  value={editing.example || ""}
-                                  onChange={(event) =>
-                                    setEditing({
-                                      ...editing,
-                                      example: event.target.value,
-                                    })
-                                  }
-                                  className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal"
-                                />
-                              </label>
-                            )}
-
-                            {editError && (
-                              <p role="alert" className="text-xs text-red-700">
-                                {editError}
+                            {entry.example && (
+                              <p className="mt-1 text-sm text-[#77877d]">
+                                {entry.example}
                               </p>
                             )}
 
-                            <div className="flex gap-2">
+                            <div className="mt-1.5 flex flex-wrap gap-2">
                               <button
-                                disabled={updating}
-                                className="min-h-10 rounded-lg bg-[#285741] px-3 text-xs font-semibold text-white disabled:opacity-50"
+                                type="button"
+                                aria-pressed={ratings[entry._id] === "got-it"}
+                                onClick={() => rateEntry(entry, "got-it")}
+                                className={
+                                  "min-h-11 rounded-lg border px-3 text-sm font-semibold " +
+                                  (ratings[entry._id] === "got-it"
+                                    ? "border-[#285741] bg-[#d8f0df]"
+                                    : "border-[#e3e9e1]")
+                                }
                               >
-                                {updating ? "Saving…" : "Save changes"}
+                                Got it
                               </button>
 
                               <button
                                 type="button"
-                                disabled={updating}
-                                onClick={() => setEditing(null)}
-                                className="min-h-10 rounded-lg border border-[#dce5dc] px-3 text-xs font-semibold"
+                                aria-pressed={ratings[entry._id] === "review"}
+                                onClick={() => rateEntry(entry, "review")}
+                                className={
+                                  "min-h-11 rounded-lg border px-3 text-sm font-semibold " +
+                                  (ratings[entry._id] === "review"
+                                    ? "border-[#806733] bg-[#f5edda]"
+                                    : "border-[#e3e9e1]")
+                                }
                               >
-                                Cancel
+                                Review again
                               </button>
+
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  disabled={updating}
+                                  aria-label="Edit entry"
+                                  onClick={() => {
+                                    setEditing({ ...entry });
+                                    setEditError("");
+                                  }}
+                                  className="ml-auto min-h-8 shrink-0 rounded-md px-2 text-xs font-semibold text-[#718078] hover:bg-[#edf5ee]"
+                                >
+                                  Edit
+                                </button>
+                              )}
                             </div>
-                          </form>
+
+                            {isAdmin && editing?._id === entry._id && (
+                              <form
+                                onSubmit={saveEdit}
+                                className="my-2 space-y-2 rounded-lg border border-[#dce5dc] bg-[#f6f8f4] p-3"
+                              >
+                                <label className="block text-xs font-semibold">
+                                  Bangla
+                                  <textarea
+                                    required
+                                    autoFocus
+                                    lang="bn"
+                                    value={editing.bangla}
+                                    onChange={(event) =>
+                                      setEditing({
+                                        ...editing,
+                                        bangla: event.target.value,
+                                      })
+                                    }
+                                    className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal"
+                                  />
+                                </label>
+
+                                <label className="block text-xs font-semibold">
+                                  English
+                                  <textarea
+                                    required
+                                    value={editing.english}
+                                    onChange={(event) =>
+                                      setEditing({
+                                        ...editing,
+                                        english: event.target.value,
+                                      })
+                                    }
+                                    className="mt-1 min-h-20 w-full rounded-lg border border-[#dce5dc] bg-white p-2 text-base font-normal"
+                                  />
+                                </label>
+
+                                <label className="block text-xs font-semibold">
+                                  Category
+                                  <input
+                                    required
+                                    list="edit-categories"
+                                    value={editing.category}
+                                    onChange={(event) =>
+                                      setEditing({
+                                        ...editing,
+                                        category: event.target.value,
+                                      })
+                                    }
+                                    className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal"
+                                  />
+                                  <datalist id="edit-categories">
+                                    {categories.map((item) => (
+                                      <option key={item} value={item} />
+                                    ))}
+                                  </datalist>
+                                </label>
+
+                                {entry.type === "vocabulary" && (
+                                  <label className="block text-xs font-semibold">
+                                    Example
+                                    <input
+                                      value={editing.example || ""}
+                                      onChange={(event) =>
+                                        setEditing({
+                                          ...editing,
+                                          example: event.target.value,
+                                        })
+                                      }
+                                      className="mt-1 min-h-10 w-full rounded-lg border border-[#dce5dc] bg-white px-2 text-base font-normal"
+                                    />
+                                  </label>
+                                )}
+
+                                {editError && (
+                                  <p role="alert" className="text-xs text-red-700">
+                                    {editError}
+                                  </p>
+                                )}
+
+                                <div className="flex gap-2">
+                                  <button
+                                    disabled={updating}
+                                    className="min-h-10 rounded-lg bg-[#285741] px-3 text-xs font-semibold text-white disabled:opacity-50"
+                                  >
+                                    {updating ? "Saving…" : "Save changes"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={updating}
+                                    onClick={() => setEditing(null)}
+                                    className="min-h-10 rounded-lg border border-[#dce5dc] px-3 text-xs font-semibold"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </form>
+                            )}
+                          </div>
                         )}
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ol>
+                    </li>
+                  ))}
+                </ol>
+              </>
             ) : (
-              <section className="rounded-2xl border border-[#e3e9e1] bg-white px-4 py-8 text-center shadow-sm">
-                <span className="text-3xl">✎</span>
-
-                <h2 className="mt-3 text-lg font-semibold">
-                  {reviewOnly ? "Nothing to review" : "No entries yet"}
-                </h2>
-
-                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#77877d]">
+              <section ref={practiceTarget} tabIndex={-1} className="rounded-2xl border border-[#e3e9e1] bg-white px-4 py-8 text-center shadow-sm">
+                <h2 className="text-lg font-semibold">
                   {reviewOnly
-                    ? "Mark an entry as Review again to find it here. Mark it Got it when you remember it."
-                    : notice ||
-                      "Add your first Bangla and English pair to start practicing."}
-                </p>
+                    ? "Nothing to review"
+                    : category !== "All categories"
+                      ? "No cards in this category"
+                      : type === "sentence"
+                        ? "No sentence cards yet"
+                        : "No vocabulary cards yet"}
+                </h2>
+                {reviewOnly && (
+                  <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#496454]">
+                    Choose Review again on a card to add it to this queue.
+                  </p>
+                )}
+                {!reviewOnly && category !== "All categories" && (
+                  <button
+                    type="button"
+                    onClick={() => updateCategory("All categories")}
+                    className="mt-4 min-h-11 rounded-xl border border-[#cfe3d2] px-4 text-sm font-semibold text-[#285741]"
+                  >
+                    Clear category filter
+                  </button>
+                )}
 
-                {isAdmin && !reviewOnly && (
+                {isAdmin && !reviewOnly && category === "All categories" && (
                   <button
                     type="button"
                     onClick={() => setView("add")}
@@ -1161,34 +1231,33 @@ export default function Home() {
           </>
         )}
 
-        {view === "practice" && displayTotal > 0 && (
+        {view === "practice" && !practiceLoading && !practiceError && !practiceComplete && visibleEntries.length > 0 && (singleCard ? displayTotal > 1 : displayPages > 1) && (
           <nav
-            aria-label="Entry pages"
+            aria-label={singleCard ? "Practice cards" : "Entry pages"}
             className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-[#e3e9e1] bg-white px-2.5 py-2 sm:px-3"
           >
             <button
               type="button"
-              onClick={() => changePage(displayPage - 1)}
-              disabled={displayPage <= 1 || (loading && !reviewOnly)}
-              className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => navigateCard(singleCard ? cardNumber - 2 : pageStart - pageSize)}
+              disabled={singleCard ? cardNumber <= 1 : displayPage <= 1}
+              className="min-h-11 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:opacity-40"
             >
-              ← Previous
+              Previous
             </button>
 
-            <span className="text-center text-xs font-medium text-[#77877d] sm:text-sm">
-              Page {displayPage} of {displayPages}
-              <span className="block text-[11px] font-normal">
-                50 per page · {displayTotal} total
+            {!singleCard && (
+              <span className="text-center text-sm font-medium text-[#496454]">
+                Page {displayPage} of {displayPages}
               </span>
-            </span>
+            )}
 
             <button
               type="button"
-              onClick={() => changePage(displayPage + 1)}
-              disabled={displayPage >= displayPages || (loading && !reviewOnly)}
-              className="min-h-10 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => navigateCard(singleCard ? cardNumber : pageStart + pageSize)}
+              disabled={singleCard ? cardNumber >= displayTotal : displayPage >= displayPages}
+              className="min-h-11 rounded-xl px-3 text-sm font-semibold text-[#315d47] hover:bg-[#f4f8f3] disabled:opacity-40"
             >
-              Next →
+              Next
             </button>
           </nav>
         )}
